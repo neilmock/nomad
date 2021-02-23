@@ -603,6 +603,18 @@ type SearchRequest struct {
 	QueryOptions
 }
 
+type FuzzySearchRequest struct {
+	// Text is what names are fuzzy-matched to. E.g. if the given text were
+	// "foo", potential matches might be "foobar", "afooz", of jobs, nodes, etc.
+	Text string
+
+	// Contexts are the types that can be matched against. A context can be a
+	// job, node, etc.
+	Contexts []Context
+
+	QueryOptions
+}
+
 // JobRegisterRequest is used for Job.Register endpoint
 // to register a job as being a schedulable entity.
 type JobRegisterRequest struct {

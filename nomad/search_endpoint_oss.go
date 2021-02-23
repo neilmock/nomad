@@ -35,9 +35,11 @@ func getEnterpriseResourceIter(context structs.Context, _ *acl.ACL, namespace, p
 	return nil, fmt.Errorf("context must be one of %v or 'all' for all contexts; got %q", allContexts, context)
 }
 
-// anySearchPerms returns true if the provided ACL has access to any
-// capabilities required for prefix searching. Returns true if aclObj is nil.
-func anySearchPerms(aclObj *acl.ACL, namespace string, context structs.Context) bool {
+// sufficientSearchPerms returns true if the provided ACL has access to each
+// capability required for prefix searching for the given context.
+//
+// Returns true if aclObj is nil.
+func sufficientSearchPerms(aclObj *acl.ACL, namespace string, context structs.Context) bool {
 	if aclObj == nil {
 		return true
 	}

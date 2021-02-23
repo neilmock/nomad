@@ -14,6 +14,8 @@ import (
 	"github.com/hashicorp/nomad/nomad/structs"
 )
 
+// YOU ARE HERE
+
 const (
 	// truncateLimit is the maximum number of matches that will be returned for a
 	// prefix for a specific context
@@ -32,6 +34,12 @@ var (
 		structs.Plugins,
 		structs.Volumes,
 		structs.ScalingPolicies,
+		structs.Namespaces,
+	}
+
+	fuzzyContexts = []structs.Context{
+		structs.Jobs,
+		structs.Nodes,
 		structs.Namespaces,
 	}
 )
@@ -168,7 +176,7 @@ func (s *Search) PrefixSearch(args *structs.SearchRequest, reply *structs.Search
 	namespace := args.RequestNamespace()
 
 	// Require either node:read or namespace:read-job
-	if !anySearchPerms(aclObj, namespace, args.Context) {
+	if !sufficientSearchPerms(aclObj, namespace, args.Context) {
 		return structs.ErrPermissionDenied
 	}
 
@@ -227,5 +235,43 @@ func (s *Search) PrefixSearch(args *structs.SearchRequest, reply *structs.Search
 			s.srv.setQueryMeta(&reply.QueryMeta)
 			return nil
 		}}
+	return s.srv.blockingRPC(&opts)
+}
+
+// FuzzySearch is used to list fuzzy matches for a given string, and returns matching
+// jobs, nodes, namespaces, (etc?).
+func (s *Search) FuzzySearch(args *structs.FuzzySearchRequest, reply *structs.SearchResponse) error {
+	fmt.Println("FuzzySearch, text:", args.Text, "contexts:", args.Contexts)
+
+	if done, err := s.srv.forward("Search.FuzzySearch", args, args, reply); done {
+		return err
+	}
+	defer metrics.MeasureSince([]string{"nomad", "search", "fuzzy_search"}, time.Now())
+
+	aclObj, err := s.srv.ResolveToken(args.AuthToken)
+	if err != nil {
+		return err
+	}
+
+	namespace := args.RequestNamespace()
+
+	for _, ctx := range args.Contexts {
+		if !sufficientSearchPerms(aclObj, namespace, ctx) {
+			return structs.ErrPermissionDenied
+		}
+	}
+
+	reply.Matches = make(map[structs.Context][]string)
+	reply.Truncations = make(map[structs.Context]bool)
+
+	// Setup the blocking query
+	opts := blockingOptions{
+		queryMeta: &reply.QueryMeta,
+		queryOpts: new(structs.QueryOptions),
+	}
+
+	// contexts := fuzzySearchContexts(aclObj, namespace, args.Contexts)
+	// YOU ARE HERE
+
 	return s.srv.blockingRPC(&opts)
 }
