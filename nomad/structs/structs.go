@@ -193,6 +193,7 @@ var (
 type Context string
 
 const (
+	// Individual context types.
 	Allocs          Context = "allocs"
 	Deployments     Context = "deployment"
 	Evals           Context = "evals"
@@ -202,9 +203,12 @@ const (
 	Quotas          Context = "quotas"
 	Recommendations Context = "recommendations"
 	ScalingPolicies Context = "scaling_policy"
-	All             Context = "all"
 	Plugins         Context = "plugins"
 	Volumes         Context = "volumes"
+
+	// Union context types.
+	All   Context = "all"
+	Fuzzy Context = "fuzzy"
 )
 
 // NamespacedID is a tuple of an ID and a namespace
@@ -607,10 +611,6 @@ type FuzzySearchRequest struct {
 	// Text is what names are fuzzy-matched to. E.g. if the given text were
 	// "foo", potential matches might be "foobar", "afooz", of jobs, nodes, etc.
 	Text string
-
-	// Contexts are the types that can be matched against. A context can be a
-	// job, node, etc.
-	Contexts []Context
 
 	QueryOptions
 }

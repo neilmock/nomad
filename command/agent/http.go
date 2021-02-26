@@ -312,8 +312,8 @@ func (s *HTTPServer) registerHandlers(enableDebug bool) {
 	s.mux.HandleFunc("/v1/status/leader", s.wrap(s.StatusLeaderRequest))
 	s.mux.HandleFunc("/v1/status/peers", s.wrap(s.StatusPeersRequest))
 
+	s.mux.HandleFunc("/v1/search/fuzzy", s.wrap(s.FuzzySearchRequest))
 	s.mux.HandleFunc("/v1/search", s.wrap(s.SearchRequest))
-	s.mux.HandleFunc("/v1/search/fuzzy", s.wrap(s.SearchRequest))
 
 	s.mux.HandleFunc("/v1/operator/license", s.wrap(s.LicenseRequest))
 	s.mux.HandleFunc("/v1/operator/raft/", s.wrap(s.OperatorRequest))

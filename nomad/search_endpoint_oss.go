@@ -80,22 +80,19 @@ func sufficientSearchPerms(aclObj *acl.ACL, namespace string, context structs.Co
 	return true
 }
 
-// searchContexts returns the contexts the aclObj is valid for. If aclObj is
-// nil all contexts are returned.
+// searchContexts returns the expanded set of contexts of context, filtered down
+// to the subset of contexts the aclObj is valid for.
+//
+// If aclObj is nil, no contexts are filtered out.
 func searchContexts(aclObj *acl.ACL, namespace string, context structs.Context) []structs.Context {
-	var all []structs.Context
+	fmt.Println("searchContexts:", context)
+	desired := expandContext(context)
 
-	switch context {
-	case structs.All:
-		all = make([]structs.Context, len(allContexts))
-		copy(all, allContexts)
-	default:
-		all = []structs.Context{context}
-	}
+	fmt.Println("desired:", desired)
 
 	// If ACLs aren't enabled return all contexts
 	if aclObj == nil {
-		return all
+		return desired
 	}
 
 	jobRead := aclObj.AllowNsOp(namespace, acl.NamespaceCapabilityReadJob)
@@ -107,8 +104,8 @@ func searchContexts(aclObj *acl.ACL, namespace string, context structs.Context) 
 	policyRead := aclObj.AllowNsOp(namespace, acl.NamespaceCapabilityListScalingPolicies)
 
 	// Filter contexts down to those the ACL grants access to
-	available := make([]structs.Context, 0, len(all))
-	for _, c := range all {
+	available := make([]structs.Context, 0, len(desired))
+	for _, c := range desired {
 		switch c {
 		case structs.Allocs, structs.Jobs, structs.Evals, structs.Deployments:
 			if jobRead {

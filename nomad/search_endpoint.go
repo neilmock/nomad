@@ -2,6 +2,8 @@ package nomad
 
 import (
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,8 +15,6 @@ import (
 	"github.com/hashicorp/nomad/nomad/state"
 	"github.com/hashicorp/nomad/nomad/structs"
 )
-
-// YOU ARE HERE
 
 const (
 	// truncateLimit is the maximum number of matches that will be returned for a
@@ -38,9 +38,10 @@ var (
 	}
 
 	fuzzyContexts = []structs.Context{
-		structs.Jobs,
 		structs.Nodes,
 		structs.Namespaces,
+		structs.Jobs,
+		structs.Allocs,
 	}
 )
 
@@ -101,9 +102,72 @@ func (s *Search) getMatches(iter memdb.ResultIterator, prefix string) ([]string,
 	return matches, iter.Next() != nil
 }
 
+func (s *Search) getFuzzyMatches(iter memdb.ResultIterator, re *regexp.Regexp) ([]string, bool) {
+	type match struct {
+		value string // the thing matched (e.g. job name)
+		pos   int    // the quality of result (lower is better)
+	}
+
+	var matches []match
+
+	for i := 0; i < truncateLimit; i++ {
+		raw := iter.Next()
+		if raw == nil {
+			break
+		}
+
+		var name string
+		switch t := raw.(type) {
+		case *structs.Node:
+			name = t.Name
+		case *structs.Namespace:
+			name = t.Name
+		case *structs.Job:
+			name = t.Name
+		case *structs.Allocation:
+			name = t.Name
+		}
+
+		if m := re.FindStringIndex(name); len(m) > 0 {
+			matches = append(matches, match{
+				value: name,
+				pos:   m[0],
+			})
+		}
+	}
+
+	sort.Slice(matches, func(a, b int) bool {
+		A := matches[a]
+		B := matches[b]
+
+		switch {
+		case A.pos < B.pos:
+			return true
+		case B.pos < A.pos:
+			return false
+
+		case len(A.value) < len(B.value):
+			return true
+		case len(B.value) < len(A.value):
+			return false
+		}
+
+		return A.value < B.value
+	})
+
+	results := make([]string, 0, len(matches))
+	for _, m := range matches {
+		results = append(results, m.value)
+	}
+
+	return results, iter.Next() != nil
+}
+
 // getResourceIter takes a context and returns a memdb iterator specific to
 // that context
 func getResourceIter(context structs.Context, aclObj *acl.ACL, namespace, prefix string, ws memdb.WatchSet, state *state.StateStore) (memdb.ResultIterator, error) {
+	fmt.Println("getResourceIter, context:", context)
+
 	switch context {
 	case structs.Jobs:
 		return state.JobsByIDPrefix(ws, namespace, prefix)
@@ -241,7 +305,7 @@ func (s *Search) PrefixSearch(args *structs.SearchRequest, reply *structs.Search
 // FuzzySearch is used to list fuzzy matches for a given string, and returns matching
 // jobs, nodes, namespaces, (etc?).
 func (s *Search) FuzzySearch(args *structs.FuzzySearchRequest, reply *structs.SearchResponse) error {
-	fmt.Println("FuzzySearch, text:", args.Text, "contexts:", args.Contexts)
+	fmt.Println("FuzzySearch, text:", args.Text)
 
 	if done, err := s.srv.forward("Search.FuzzySearch", args, args, reply); done {
 		return err
@@ -255,10 +319,8 @@ func (s *Search) FuzzySearch(args *structs.FuzzySearchRequest, reply *structs.Se
 
 	namespace := args.RequestNamespace()
 
-	for _, ctx := range args.Contexts {
-		if !sufficientSearchPerms(aclObj, namespace, ctx) {
-			return structs.ErrPermissionDenied
-		}
+	if !sufficientSearchPerms(aclObj, namespace, structs.Fuzzy) {
+		return structs.ErrPermissionDenied
 	}
 
 	reply.Matches = make(map[structs.Context][]string)
@@ -268,10 +330,67 @@ func (s *Search) FuzzySearch(args *structs.FuzzySearchRequest, reply *structs.Se
 	opts := blockingOptions{
 		queryMeta: &reply.QueryMeta,
 		queryOpts: new(structs.QueryOptions),
+		run: func(ws memdb.WatchSet, state *state.StateStore) error {
+			fmt.Println("SH do run in blocking query")
+
+			iters := make(map[structs.Context]memdb.ResultIterator)
+
+			fmt.Println("doSearch, fuzzy:", structs.Fuzzy)
+			contexts := searchContexts(aclObj, namespace, structs.Fuzzy)
+
+			for _, ctx := range contexts {
+				noPrefix := "" // search everything
+				iter, err := getResourceIter(ctx, aclObj, namespace, noPrefix, ws, state)
+				if err != nil {
+					return err
+				}
+				iters[ctx] = iter
+			}
+
+			// compile the matcher once and reuse it
+			re := regexp.MustCompile(args.Text)
+
+			// Return fuzzy matches for the given text
+			for k, v := range iters {
+				res, isTrunc := s.getFuzzyMatches(v, re)
+				reply.Matches[k] = res
+				reply.Truncations[k] = isTrunc
+			}
+
+			// Set the index for the context. If the context has been specified,
+			// it will be used as the index of the response. Otherwise, the maximum
+			// index from all the resources will be used.
+			for _, ctx := range contexts {
+				index, err := state.Index(contextToIndex(ctx))
+				if err != nil {
+					return err
+				}
+				if index > reply.Index {
+					reply.Index = index
+				}
+			}
+
+			s.srv.setQueryMeta(&reply.QueryMeta)
+			return nil
+		},
 	}
 
-	// contexts := fuzzySearchContexts(aclObj, namespace, args.Contexts)
-	// YOU ARE HERE
-
 	return s.srv.blockingRPC(&opts)
+}
+
+func expandContext(context structs.Context) []structs.Context {
+	fmt.Println("expand:", context)
+
+	switch context {
+	case structs.All:
+		c := make([]structs.Context, len(allContexts))
+		copy(c, allContexts)
+		return c
+	case structs.Fuzzy:
+		c := make([]structs.Context, len(fuzzyContexts))
+		copy(c, fuzzyContexts)
+		return c
+	default:
+		return []structs.Context{context}
+	}
 }
