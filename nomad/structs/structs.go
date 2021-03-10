@@ -207,9 +207,15 @@ const (
 	Volumes         Context = "volumes"
 
 	// Union context types.
-	All   Context = "all"
-	Fuzzy Context = "fuzzy"
+	All Context = "all"
 )
+
+// A Scope associates an ID of a Nomad object (e.g. UUID or Name) with the Context
+// in which that object exists.
+type Scope struct {
+	Context Context
+	ID      string
+}
 
 // NamespacedID is a tuple of an ID and a namespace
 type NamespacedID struct {
@@ -607,10 +613,22 @@ type SearchRequest struct {
 	QueryOptions
 }
 
+type FuzzyMatch []Scope
+
+type FuzzySearchResponse struct {
+	Matches map[Context][]FuzzyMatch
+
+	// Truncations indicates whether the matches for a particular context have
+	// been truncated.
+	Truncations map[Context]bool
+}
+
 type FuzzySearchRequest struct {
 	// Text is what names are fuzzy-matched to. E.g. if the given text were
 	// "foo", potential matches might be "foobar", "afooz", of jobs, nodes, etc.
 	Text string
+
+	// no context for now, assume all fuzzy search queries of context "all".
 
 	QueryOptions
 }

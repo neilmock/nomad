@@ -63,3 +63,11 @@ type SearchResponse struct {
 	Truncations map[contexts.Context]bool
 	QueryMeta
 }
+
+type FuzzySearchResponse struct {
+	Matches     map[contexts.Context]FuzzyMatch
+	Truncations map[contexts.Context]bool // okay, what to do about multi-contexts per upper context?
+	QueryMeta
+}
+
+type FuzzyMatch []contexts.Scope

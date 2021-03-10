@@ -102,7 +102,7 @@ func (s *Search) getMatches(iter memdb.ResultIterator, prefix string) ([]string,
 	return matches, iter.Next() != nil
 }
 
-func (s *Search) getFuzzyMatches(iter memdb.ResultIterator, re *regexp.Regexp) ([]string, bool) {
+func (s *Search) getFuzzyMatches(iter memdb.ResultIterator, re *regexp.Regexp) (FuzzyMatch, bool) {
 	type match struct {
 		value string // the thing matched (e.g. job name)
 		pos   int    // the quality of result (lower is better)
@@ -304,7 +304,7 @@ func (s *Search) PrefixSearch(args *structs.SearchRequest, reply *structs.Search
 
 // FuzzySearch is used to list fuzzy matches for a given string, and returns matching
 // jobs, nodes, namespaces, (etc?).
-func (s *Search) FuzzySearch(args *structs.FuzzySearchRequest, reply *structs.SearchResponse) error {
+func (s *Search) FuzzySearch(args *structs.FuzzySearchRequest, reply *structs.FuzzySearchResponse) error {
 	fmt.Println("FuzzySearch, text:", args.Text)
 
 	if done, err := s.srv.forward("Search.FuzzySearch", args, args, reply); done {
@@ -319,11 +319,11 @@ func (s *Search) FuzzySearch(args *structs.FuzzySearchRequest, reply *structs.Se
 
 	namespace := args.RequestNamespace()
 
-	if !sufficientSearchPerms(aclObj, namespace, structs.Fuzzy) {
+	if !sufficientSearchPerms(aclObj, namespace, structs.All) {
 		return structs.ErrPermissionDenied
 	}
 
-	reply.Matches = make(map[structs.Context][]string)
+	reply.Matches = make(map[structs.Context]structs.FuzzyMatch)
 	reply.Truncations = make(map[structs.Context]bool)
 
 	// Setup the blocking query
