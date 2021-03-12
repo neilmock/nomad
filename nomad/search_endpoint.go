@@ -95,7 +95,6 @@ func (s *Search) getMatches(iter memdb.ResultIterator, prefix string) ([]string,
 }
 
 func (s *Search) getFuzzyMatches(iter memdb.ResultIterator, text string) (map[structs.Context][]structs.FuzzyMatch, bool) {
-
 	scoredMatches := make(map[structs.Context][]scoredMatch)
 
 	accumulate := func(m map[structs.Context][]scoredMatch) {
@@ -111,9 +110,8 @@ func (s *Search) getFuzzyMatches(iter memdb.ResultIterator, text string) (map[st
 		}
 
 		switch t := raw.(type) {
-		// todo: other types ...
 		case *structs.Job:
-			accumulate(fuzzyMatchesJob(t, text))
+			accumulate(s.fuzzyMatchesJob(t, text))
 		default:
 			panic("todo more types")
 		}
@@ -124,82 +122,82 @@ func (s *Search) getFuzzyMatches(iter memdb.ResultIterator, text string) (map[st
 		sortScoredMatches(text, scoredMatches[ctx])
 	}
 
-	// copy the sorted results into exported types
 	// create the result out of exported types
 	m := make(map[structs.Context][]structs.FuzzyMatch, len(scoredMatches))
 	for ctx, matches := range scoredMatches {
 		m[ctx] = make([]structs.FuzzyMatch, 0, len(matches))
 		for _, match := range matches {
-			m[ctx] = append(m[ctx], match.FuzzyMatch)
+			m[ctx] = append(m[ctx], structs.FuzzyMatch{
+				ID:    match.id,
+				Scope: match.scope,
+			})
 		}
 	}
 
 	return m, iter.Next() != nil
 }
 
-//func (s *Search) getFuzzyMatches(iter memdb.ResultIterator, text string) (structs.FuzzyMatch, bool) {
-//	type match struct {
-//		value string // the thing matched (e.g. job name)
-//		pos   int    // the quality of result (lower is better)
-//	}
-//
-//	var matches []match
-//
-//	for i := 0; i < truncateLimit; i++ {
-//		raw := iter.Next()
-//		if raw == nil {
-//			break
-//		}
-//
-//		var name string
-//
-//		// need to build FuzzyMatch pointer
-//
-//		switch t := raw.(type) {
-//		case *structs.Node:
-//			name = t.Name
-//		case *structs.Namespace:
-//			name = t.Name
-//		case *structs.Job:
-//			name = t.Name
-//		case *structs.Allocation:
-//			name = t.Name
-//		}
-//
-//		if idx := strings.Index(name, text); idx >= 0 {
-//			matches = append(matches, match{
-//				value: name,
-//				pos:   idx,
-//			})
-//		}
-//	}
-//
-//	sort.Slice(matches, func(a, b int) bool {
-//		A := matches[a]
-//		B := matches[b]
-//
-//		switch {
-//		case A.pos < B.pos:
-//			return true
-//		case B.pos < A.pos:
-//			return false
-//
-//		case len(A.value) < len(B.value):
-//			return true
-//		case len(B.value) < len(A.value):
-//			return false
-//		}
-//
-//		return A.value < B.value
-//	})
-//
-//	results := make([]structs.FuzzyMatch, 0, len(matches))
-//	for _, m := range matches {
-//		results = append(results, m.value)
-//	}
-//
-//	return results, iter.Next() != nil
-//}
+func (s *Search) getFuzzyMatchesPlain(iter memdb.ResultIterator, text string) (structs.FuzzyMatch, bool) {
+	type match struct {
+		value string // the thing matched (e.g. job name)
+		pos   int    // the quality of result (lower is better)
+	}
+
+	var matches []match
+
+	for i := 0; i < truncateLimit; i++ {
+		raw := iter.Next()
+		if raw == nil {
+			break
+		}
+
+		var name string
+
+		// need to build FuzzyMatch pointer
+
+		switch t := raw.(type) {
+		case *structs.Node:
+			name = t.Name
+		case *structs.Namespace:
+			name = t.Name
+		case *structs.Allocation:
+			name = t.Name
+		}
+
+		if idx := strings.Index(name, text); idx >= 0 {
+			matches = append(matches, match{
+				value: name,
+				pos:   idx,
+			})
+		}
+	}
+
+	sort.Slice(matches, func(a, b int) bool {
+		A := matches[a]
+		B := matches[b]
+
+		switch {
+		case A.pos < B.pos:
+			return true
+		case B.pos < A.pos:
+			return false
+
+		case len(A.value) < len(B.value):
+			return true
+		case len(B.value) < len(A.value):
+			return false
+		}
+
+		return A.value < B.value
+	})
+
+	results := make([]structs.FuzzyMatch, 0, len(matches))
+	for _, m := range matches {
+		results = append(results, m.value)
+	}
+
+	return results, iter.Next() != nil
+}
 
 // getFuzzyMatchesJob digs through j and extracts matches against several types
 // of matchable Context. Results are categorized
@@ -210,61 +208,58 @@ func (s *Search) getFuzzyMatches(iter memdb.ResultIterator, text string) (map[st
 //   job|group|task.name
 //   job|group|task|service.name
 //   job|group|task|driver.{image,command}
-func fuzzyMatchesJob(j *structs.Job, text string) map[structs.Context][]scoredMatch {
+func (*Search) fuzzyMatchesJob(j *structs.Job, text string) map[structs.Context][]scoredMatch {
 	sm := make(map[structs.Context][]scoredMatch)
+	ns := j.Namespace
+	job := j.Name
 
 	// job.name
 	if idx := strings.Index(j.Name, text); idx >= 0 {
-		sm[structs.Jobs] = append(sm[structs.Jobs], scored(nil, structs.Jobs, j.Name, idx))
+		sm[structs.Jobs] = append(sm[structs.Jobs], score(job, ns, idx))
 	}
 
 	// job|group.name
-	rootJob := structs.FuzzyMatch{{Context: structs.Jobs, ID: j.Name}}
 	for _, group := range j.TaskGroups {
 		if idx := strings.Index(group.Name, text); idx >= 0 {
-			sm[structs.Groups] = append(sm[structs.Groups], scored(rootJob, structs.Groups, group.Name, idx))
+			sm[structs.Groups] = append(sm[structs.Groups], score(group.Name, ns, idx, job))
 		}
-
-		rootGroup := append(rootJob, rooted(rootJob, structs.Groups, group.Name)...)
 
 		// job|group|service.name
 		for _, service := range group.Services {
 			if idx := strings.Index(service.Name, text); idx >= 0 {
-				sm[structs.Services] = append(sm[structs.Services], scored(rootGroup, structs.Services, service.Name, idx))
+				sm[structs.Services] = append(sm[structs.Services], score(service.Name, ns, idx, job, group.Name))
 			}
 		}
 
 		// job|group|task.name
 		for _, task := range group.Tasks {
 			if idx := strings.Index(task.Name, text); idx >= 0 {
-				sm[structs.Tasks] = append(sm[structs.Tasks], scored(rootGroup, structs.Tasks, task.Name, idx))
+				sm[structs.Tasks] = append(sm[structs.Tasks], score(task.Name, ns, idx, job, group.Name))
 			}
-
-			rootTask := append(rootGroup, rooted(rootGroup, structs.Tasks, task.Name)...)
 
 			// job|group|task|service.name
 			for _, service := range task.Services {
 				if idx := strings.Index(service.Name, text); idx >= 0 {
-					sm[structs.Services] = append(sm[structs.Services], scored(rootTask, structs.Services, service.Name, idx))
+					sm[structs.Services] = append(sm[structs.Services], score(service.Name, ns, idx, job, group.Name, task.Name))
 				}
 			}
 
 			// job|group|task|config.{image,driver,class}
 			switch task.Driver {
 			case "docker":
-				image := lookup(task.Config, "image")
+				image := getConfigParam(task.Config, "image")
 				if idx := strings.Index(image, text); idx >= 0 {
-					sm[structs.Images] = append(sm[structs.Images], scored(rootTask, structs.Images, image, idx))
+					sm[structs.Images] = append(sm[structs.Images], score(image, ns, idx, job, group.Name, task.Name))
 				}
 			case "exec", "raw_exec":
-				command := lookup(task.Config, "command")
+				command := getConfigParam(task.Config, "command")
 				if idx := strings.Index(command, text); idx >= 0 {
-					sm[structs.Commands] = append(sm[structs.Commands], scored(rootTask, structs.Commands, command, idx))
+					sm[structs.Commands] = append(sm[structs.Commands], score(command, ns, idx, job, group.Name, task.Name))
 				}
 			case "java":
-				class := lookup(task.Config, "class")
+				class := getConfigParam(task.Config, "class")
 				if idx := strings.Index(class, text); idx >= 0 {
-					sm[structs.Classes] = append(sm[structs.Classes], scored(rootTask, structs.Classes, class, idx))
+					sm[structs.Classes] = append(sm[structs.Classes], score(class, ns, idx, job, group.Name, task.Name))
 				}
 			}
 		}
@@ -273,7 +268,7 @@ func fuzzyMatchesJob(j *structs.Job, text string) map[structs.Context][]scoredMa
 	return sm
 }
 
-func lookup(config map[string]interface{}, param string) string {
+func getConfigParam(config map[string]interface{}, param string) string {
 	if config == nil || config[param] == nil {
 		return ""
 	}
@@ -287,8 +282,17 @@ func lookup(config map[string]interface{}, param string) string {
 }
 
 type scoredMatch struct {
-	structs.FuzzyMatch
+	id    string
+	scope []string
 	score int
+}
+
+func score(id, namespace string, score int, scope ...string) scoredMatch {
+	return scoredMatch{
+		id:    id,
+		score: score,
+		scope: append([]string{namespace}, scope...),
+	}
 }
 
 func sortScoredMatches(text string, matches []scoredMatch) {
@@ -305,7 +309,7 @@ func sortScoredMatches(text string, matches []scoredMatch) {
 
 		// shorter length matched text is more likely to be the thing being
 		// searched for ... at least that's the theory
-		idA, idB := A.ID(), B.ID()
+		idA, idB := A.id, B.id
 		switch {
 		case len(idA) < len(idB):
 			return true
@@ -316,20 +320,6 @@ func sortScoredMatches(text string, matches []scoredMatch) {
 		// same index and same length, break ties alphabetically
 		return idA < idB
 	})
-}
-
-func rooted(root structs.FuzzyMatch, ctx structs.Context, id string) []structs.Scope {
-	return append(root, structs.Scope{
-		Context: ctx,
-		ID:      id,
-	})
-}
-
-func scored(root structs.FuzzyMatch, ctx structs.Context, id string, score int) scoredMatch {
-	return scoredMatch{
-		score:      score,
-		FuzzyMatch: rooted(root, ctx, id),
-	}
 }
 
 // getResourceIter takes a context and returns a memdb iterator specific to
@@ -474,7 +464,7 @@ func (s *Search) PrefixSearch(args *structs.SearchRequest, reply *structs.Search
 // FuzzySearch is used to list fuzzy matches for a given string, and returns matching
 // jobs, nodes, namespaces, (etc?).
 func (s *Search) FuzzySearch(args *structs.FuzzySearchRequest, reply *structs.FuzzySearchResponse) error {
-	fmt.Println("FuzzySearch, text:", args.Text)
+	// validate here?
 
 	if done, err := s.srv.forward("Search.FuzzySearch", args, args, reply); done {
 		return err

@@ -219,13 +219,6 @@ const (
 	Classes  Context = "classes"
 )
 
-// A Scope associates an ID of a Nomad object (e.g. UUID or Name) with the Context
-// in which that object exists.
-type Scope struct {
-	Context Context
-	ID      string
-}
-
 // NamespacedID is a tuple of an ID and a namespace
 type NamespacedID struct {
 	ID        string
@@ -622,12 +615,9 @@ type SearchRequest struct {
 	QueryOptions
 }
 
-type FuzzyMatch []Scope
-
-// ID returns the matched ID (uuid or name) represented by this chain of
-// scoped contexts. (i.e. the last element)
-func (fm FuzzyMatch) ID() string {
-	return fm[len(fm)-1].ID
+type FuzzyMatch struct {
+	ID    string   // ID is UUID or Name of object
+	Scope []string // IDs of parent objects
 }
 
 type FuzzySearchResponse struct {
@@ -645,7 +635,10 @@ type FuzzySearchRequest struct {
 	// "foo", potential matches might be "foobar", "afooz", of jobs, nodes, etc.
 	Text string
 
-	// no context for now, assume all fuzzy search queries of context "all".
+	// Context is the type that can be matched against. A context can be a job,
+	// node, evaluation, allocation, or all (indicated every context should be
+	// matched)
+	Context Context
 
 	QueryOptions
 }
