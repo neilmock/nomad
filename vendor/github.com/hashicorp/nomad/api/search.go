@@ -13,7 +13,7 @@ func (c *Client) Search() *Search {
 	return &Search{client: c}
 }
 
-// PrefixSearch returns a list of matches for a particular context and prefix.
+// PrefixSearch returns a set of matches for a particular context and prefix.
 func (s *Search) PrefixSearch(prefix string, context contexts.Context, q *QueryOptions) (*SearchResponse, *QueryMeta, error) {
 	var resp SearchResponse
 	req := &SearchRequest{Prefix: prefix, Context: context}
@@ -32,8 +32,40 @@ type SearchRequest struct {
 	QueryOptions
 }
 
+// FuzzySearch returns a set of matches for a given context and string.
+func (s *Search) FuzzySearch(text string, context []contexts.Context, q *QueryOptions) (*FuzzySearchResponse, *QueryMeta, error) {
+	var resp FuzzySearchResponse
+
+	c := make([]contexts.Context, len(context))
+	copy(c, context)
+
+	req := &FuzzySearchRequest{
+		Text: text,
+	}
+
+	qm, err := s.client.putQuery("/v1/search/fuzzy", req, &resp, q)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return &resp, qm, nil
+}
+
+type FuzzySearchRequest struct {
+	Text string
+	QueryOptions
+}
+
 type SearchResponse struct {
 	Matches     map[contexts.Context][]string
 	Truncations map[contexts.Context]bool
 	QueryMeta
 }
+
+type FuzzySearchResponse struct {
+	Matches     map[contexts.Context]FuzzyMatch
+	Truncations map[contexts.Context]bool
+	QueryMeta
+}
+
+type FuzzyMatch []contexts.Scope

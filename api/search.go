@@ -33,15 +33,14 @@ type SearchRequest struct {
 }
 
 // FuzzySearch returns a set of matches for a given context and string.
-func (s *Search) FuzzySearch(text string, context []contexts.Context, q *QueryOptions) (*SearchResponse, *QueryMeta, error) {
-	var resp SearchResponse
+func (s *Search) FuzzySearch(text string, context []contexts.Context, q *QueryOptions) (*FuzzySearchResponse, *QueryMeta, error) {
+	var resp FuzzySearchResponse
 
 	c := make([]contexts.Context, len(context))
 	copy(c, context)
 
 	req := &FuzzySearchRequest{
-		Text:     text,
-		Contexts: c,
+		Text: text,
 	}
 
 	qm, err := s.client.putQuery("/v1/search/fuzzy", req, &resp, q)
@@ -53,8 +52,7 @@ func (s *Search) FuzzySearch(text string, context []contexts.Context, q *QueryOp
 }
 
 type FuzzySearchRequest struct {
-	Text     string
-	Contexts []contexts.Context
+	Text string
 	QueryOptions
 }
 
@@ -66,7 +64,7 @@ type SearchResponse struct {
 
 type FuzzySearchResponse struct {
 	Matches     map[contexts.Context]FuzzyMatch
-	Truncations map[contexts.Context]bool // okay, what to do about multi-contexts per upper context?
+	Truncations map[contexts.Context]bool
 	QueryMeta
 }
 

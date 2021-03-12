@@ -194,10 +194,11 @@ type Context string
 
 const (
 	// Individual context types.
-	Allocs          Context = "allocs"
-	Deployments     Context = "deployment"
-	Evals           Context = "evals"
-	Jobs            Context = "jobs"
+	Allocs      Context = "allocs"
+	Deployments Context = "deployment"
+	Evals       Context = "evals"
+	Jobs        Context = "jobs"
+
 	Nodes           Context = "nodes"
 	Namespaces      Context = "namespaces"
 	Quotas          Context = "quotas"
@@ -208,6 +209,14 @@ const (
 
 	// Union context types.
 	All Context = "all"
+
+	// Subtypes used in fuzzy matching.
+	Groups   Context = "groups"
+	Services Context = "services"
+	Tasks    Context = "tasks"
+	Images   Context = "images"
+	Commands Context = "commands"
+	Classes  Context = "classes"
 )
 
 // A Scope associates an ID of a Nomad object (e.g. UUID or Name) with the Context
@@ -615,12 +624,20 @@ type SearchRequest struct {
 
 type FuzzyMatch []Scope
 
+// ID returns the matched ID (uuid or name) represented by this chain of
+// scoped contexts. (i.e. the last element)
+func (fm FuzzyMatch) ID() string {
+	return fm[len(fm)-1].ID
+}
+
 type FuzzySearchResponse struct {
 	Matches map[Context][]FuzzyMatch
 
 	// Truncations indicates whether the matches for a particular context have
 	// been truncated.
 	Truncations map[Context]bool
+
+	QueryMeta
 }
 
 type FuzzySearchRequest struct {
