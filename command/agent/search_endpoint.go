@@ -53,7 +53,7 @@ func (s *HTTPServer) newFuzzySearchRequest(resp http.ResponseWriter, req *http.R
 		return nil, nil
 	}
 
-	var out structs.SearchResponse
+	var out structs.FuzzySearchResponse
 	if err := s.agent.RPC("Search.FuzzySearch", &args, &out); err != nil {
 		return nil, err
 	}
