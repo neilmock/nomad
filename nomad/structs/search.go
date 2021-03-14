@@ -60,12 +60,12 @@ type SearchConfig struct {
 }
 
 // SearchResponse is used to return matches and information about whether
-// the match list is truncated specific to each type of context.
+// the match list is truncated specific to each type of Context.
 type SearchResponse struct {
-	// Map of context types to ids which match a specified prefix
+	// Map of Context types to ids which match a specified prefix
 	Matches map[Context][]string
 
-	// Truncations indicates whether the matches for a particular context have
+	// Truncations indicates whether the matches for a particular Context have
 	// been truncated
 	Truncations map[Context]bool
 
@@ -88,29 +88,42 @@ type SearchRequest struct {
 	QueryOptions
 }
 
+// FuzzyMatch is used to describe the ID of an object which may be a machine
+// readable UUID or a human readable Name. If the object is a component of a Job,
+// the Scope is a list of IDs starting from Namespace down to the parent object of
+// ID.
+//
+// e.g. A Task-level service would have scope like,
+//   ["<namespace>", "<job>", "<group>", "<task>"]
 type FuzzyMatch struct {
 	ID    string   // ID is UUID or Name of object
 	Scope []string `json:",omitempty"` // IDs of parent objects
 }
 
+// FuzzySearchResponse is used to return fuzzy matches and information about
+// whether the match list is truncated specific to each type of searchable Context.
 type FuzzySearchResponse struct {
+	// Matches is a map of Context types to IDs which fuzzy match a specified query.
 	Matches map[Context][]FuzzyMatch
 
-	// Truncations indicates whether the matches for a particular context have
+	// Truncations indicates whether the matches for a particular Context have
 	// been truncated.
 	Truncations map[Context]bool
 
 	QueryMeta
 }
 
+// FuzzySearchRequest is used to parameterize a fuzzy search request, and returns
+// a list of matches made up of jobs, allocations, evaluations, and/or nodes,
+// along with whether or not the information returned is truncated.
 type FuzzySearchRequest struct {
 	// Text is what names are fuzzy-matched to. E.g. if the given text were
-	// "foo", potential matches might be "foobar", "afooz", of jobs, nodes, etc.
+	// "py", potential matches might be "python", "mypy", etc. of jobs, nodes,
+	// allocs, groups, services, commands, images, classes.
 	Text string
 
-	// Context is the type that can be matched against. A context can be a job,
-	// node, evaluation, allocation, or all (indicated every context should be
-	// matched)
+	// Context is the type that can be matched against. A Context of "all" indicates
+	// all Contexts types are queried for matching.
 	Context Context
 
 	QueryOptions

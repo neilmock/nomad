@@ -28,8 +28,3 @@ const (
 	// Meta Context used to represent the set of all the higher level Context types.
 	All Context = "all"
 )
-
-type Scope struct {
-	Context Context
-	ID      string
-}
