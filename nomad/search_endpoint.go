@@ -95,6 +95,9 @@ func (s *Search) getPrefixMatches(iter memdb.ResultIterator, prefix string) ([]s
 }
 
 func (s *Search) getFuzzyMatches(iter memdb.ResultIterator, text string) (map[structs.Context][]structs.FuzzyMatch, bool) {
+	limitQuery := s.srv.config.SearchConfig.LimitQuery
+	// limitResults := s.srv.config.SearchConfig.LimitResults // todo: not used yet
+
 	scoredMatches := make(map[structs.Context][]scoredMatch)
 
 	accumulateSet := func(m map[structs.Context][]scoredMatch) {
@@ -109,7 +112,7 @@ func (s *Search) getFuzzyMatches(iter memdb.ResultIterator, text string) (map[st
 		}
 	}
 
-	for i := 0; i < truncateLimit; i++ {
+	for i := 0; i < limitQuery; i++ {
 		raw := iter.Next()
 		if raw == nil {
 			break
@@ -466,8 +469,9 @@ func (s *Search) FuzzySearch(args *structs.FuzzySearchRequest, reply *structs.Fu
 	}
 	defer metrics.MeasureSince([]string{"nomad", "search", "fuzzy_search"}, time.Now())
 
-	if len(args.Text) < 2 { // todo: configurable
-		return fmt.Errorf("fuzzy search query must be at least %d characters", 3)
+	min := s.srv.config.SearchConfig.MinTermLength
+	if n := len(args.Text); n < min {
+		return fmt.Errorf("fuzzy search query must be at least %d characters, got %d", min, n)
 	}
 
 	aclObj, err := s.srv.ResolveToken(args.AuthToken)
