@@ -428,6 +428,8 @@ func convertServerConfig(agentConfig *Config) (*nomad.Config, error) {
 		}
 	}
 
+	fmt.Println("CCC mtl:", conf.SearchConfig.MinTermLength)
+
 	return conf, nil
 }
 

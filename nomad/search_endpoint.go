@@ -94,21 +94,36 @@ func (s *Search) getPrefixMatches(iter memdb.ResultIterator, prefix string) ([]s
 	return matches, iter.Next() != nil
 }
 
-func (s *Search) getFuzzyMatches(iter memdb.ResultIterator, text string) (map[structs.Context][]structs.FuzzyMatch, bool) {
+func (s *Search) getFuzzyMatches(iter memdb.ResultIterator, text string) (map[structs.Context][]structs.FuzzyMatch, map[structs.Context]bool) {
 	limitQuery := s.srv.config.SearchConfig.LimitQuery
-	// limitResults := s.srv.config.SearchConfig.LimitResults // todo: not used yet
+	limitResults := s.srv.config.SearchConfig.LimitResults
 
-	scoredMatches := make(map[structs.Context][]scoredMatch)
+	fmt.Println("SH GFM limitQuery:", limitQuery, "limitResults:", limitResults)
 
-	accumulateSet := func(m map[structs.Context][]scoredMatch) {
-		for ctx := range m {
-			scoredMatches[ctx] = append(scoredMatches[ctx], m[ctx]...)
+	unsorted := make(map[structs.Context][]fuzzyMatch)
+	truncations := make(map[structs.Context]bool)
+
+	accumulateSet := func(set map[structs.Context][]fuzzyMatch) {
+		for ctx, matches := range set {
+			for _, match := range matches {
+				if len(unsorted[ctx]) < limitResults {
+					unsorted[ctx] = append(unsorted[ctx], match)
+				} else {
+					truncations[ctx] = true
+					return
+				}
+			}
 		}
 	}
 
-	accumulateSingle := func(ctx structs.Context, match *scoredMatch) {
+	accumulateSingle := func(ctx structs.Context, match *fuzzyMatch) {
 		if match != nil {
-			scoredMatches[ctx] = append(scoredMatches[ctx], *match)
+			if len(unsorted[ctx]) < limitResults {
+				unsorted[ctx] = append(unsorted[ctx], *match)
+			} else {
+				truncations[ctx] = true
+				return
+			}
 		}
 	}
 
@@ -126,14 +141,14 @@ func (s *Search) getFuzzyMatches(iter memdb.ResultIterator, text string) (map[st
 		}
 	}
 
-	// sort all the scored results
-	for ctx := range scoredMatches {
-		sortScoredMatches(text, scoredMatches[ctx])
+	// sort the set of match results
+	for ctx := range unsorted {
+		sortSet(text, unsorted[ctx])
 	}
 
 	// create the result out of exported types
-	m := make(map[structs.Context][]structs.FuzzyMatch, len(scoredMatches))
-	for ctx, matches := range scoredMatches {
+	m := make(map[structs.Context][]structs.FuzzyMatch, len(unsorted))
+	for ctx, matches := range unsorted {
 		m[ctx] = make([]structs.FuzzyMatch, 0, len(matches))
 		for _, match := range matches {
 			m[ctx] = append(m[ctx], structs.FuzzyMatch{
@@ -143,12 +158,12 @@ func (s *Search) getFuzzyMatches(iter memdb.ResultIterator, text string) (map[st
 		}
 	}
 
-	return m, iter.Next() != nil
+	return m, truncations
 }
 
 // fuzzySingleMatch determines if the ID of raw is a fuzzy match with text.
 // Returns the context and score or nil if there is no match.
-func (s *Search) fuzzyMatchSingle(raw interface{}, text string) (structs.Context, *scoredMatch) {
+func (s *Search) fuzzyMatchSingle(raw interface{}, text string) (structs.Context, *fuzzyMatch) {
 	var (
 		name string
 		ctx  structs.Context
@@ -170,7 +185,7 @@ func (s *Search) fuzzyMatchSingle(raw interface{}, text string) (structs.Context
 	}
 
 	if idx := strings.Index(name, text); idx >= 0 {
-		return ctx, &scoredMatch{
+		return ctx, &fuzzyMatch{
 			id:    name,
 			score: idx,
 			scope: nil, // currently no non-job sub-types need scoping
@@ -190,8 +205,8 @@ func (s *Search) fuzzyMatchSingle(raw interface{}, text string) (structs.Context
 //   job|group|task.name
 //   job|group|task|service.name
 //   job|group|task|driver.{image,command,class}
-func (*Search) fuzzyMatchesJob(j *structs.Job, text string) map[structs.Context][]scoredMatch {
-	sm := make(map[structs.Context][]scoredMatch)
+func (*Search) fuzzyMatchesJob(j *structs.Job, text string) map[structs.Context][]fuzzyMatch {
+	sm := make(map[structs.Context][]fuzzyMatch)
 	ns := j.Namespace
 	job := j.Name
 
@@ -263,21 +278,21 @@ func getConfigParam(config map[string]interface{}, param string) string {
 	return s
 }
 
-type scoredMatch struct {
+type fuzzyMatch struct {
 	id    string
 	scope []string
 	score int
 }
 
-func score(id, namespace string, score int, scope ...string) scoredMatch {
-	return scoredMatch{
+func score(id, namespace string, score int, scope ...string) fuzzyMatch {
+	return fuzzyMatch{
 		id:    id,
 		score: score,
 		scope: append([]string{namespace}, scope...),
 	}
 }
 
-func sortScoredMatches(text string, matches []scoredMatch) {
+func sortSet(text string, matches []fuzzyMatch) {
 	sort.Slice(matches, func(a, b int) bool {
 		A, B := matches[a], matches[b]
 
@@ -470,6 +485,8 @@ func (s *Search) FuzzySearch(args *structs.FuzzySearchRequest, reply *structs.Fu
 	defer metrics.MeasureSince([]string{"nomad", "search", "fuzzy_search"}, time.Now())
 
 	min := s.srv.config.SearchConfig.MinTermLength
+	fmt.Println("min:", min, "len:", len(args.Text))
+
 	if n := len(args.Text); n < min {
 		return fmt.Errorf("fuzzy search query must be at least %d characters, got %d", min, n)
 	}
@@ -532,10 +549,12 @@ func (s *Search) FuzzySearch(args *structs.FuzzySearchRequest, reply *structs.Fu
 
 			// Set fuzzy matches of the given text
 			for _, iter := range fuzzyIters {
-				matches, isTrunc := s.getFuzzyMatches(iter, args.Text)
+				matches, truncations := s.getFuzzyMatches(iter, args.Text)
 				for ctx := range matches {
 					reply.Matches[ctx] = matches[ctx]
-					reply.Truncations[ctx] = isTrunc
+				}
+				for ctx := range truncations {
+					reply.Truncations[ctx] = truncations[ctx]
 				}
 			}
 

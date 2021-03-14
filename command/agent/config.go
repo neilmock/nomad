@@ -1469,8 +1469,16 @@ func (a *ServerConfig) Merge(b *ServerConfig) *ServerConfig {
 	}
 
 	if b.Search != nil {
-		c := *b.Search
-		result.Search = &c
+		result.Search = &Search{FuzzyEnabled: b.Search.FuzzyEnabled}
+		if b.Search.LimitQuery > 0 {
+			result.Search.LimitQuery = b.Search.LimitQuery
+		}
+		if b.Search.LimitResults > 0 {
+			result.Search.LimitResults = b.Search.LimitResults
+		}
+		if b.Search.MinTermLength > 0 {
+			result.Search.MinTermLength = b.Search.MinTermLength
+		}
 	}
 
 	// Add the schedulers
