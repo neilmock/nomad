@@ -1,6 +1,7 @@
+// Package contexts provides constants used with the Nomad Search API.
 package contexts
 
-// Context defines the scope in which a search for Nomad object operates
+// Context defines the scope in which a search for Nomad object operates.
 type Context string
 
 const (
@@ -21,10 +22,12 @@ const (
 	// These Context types are used to associate a search result from a lower
 	// level Nomad object with one of the higher level Context types above.
 	Groups   Context = "groups"
+	Services Context = "services"
 	Tasks    Context = "tasks"
 	Images   Context = "images"
-	Services Context = "services"
+	Commands Context = "commands"
+	Classes  Context = "classes"
 
-	// Meta Context used to represent the set of all the higher level Context types.
+	// Context used to represent the set of all the higher level Context types.
 	All Context = "all"
 )

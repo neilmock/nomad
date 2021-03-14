@@ -1,16 +1,15 @@
 package structs
 
 // Context defines the scope in which a search for Nomad object operates, and
-// is also used to query the matching index value for this context
+// is also used to query the matching index value for this context.
 type Context string
 
 const (
 	// Individual context types.
-	Allocs      Context = "allocs"
-	Deployments Context = "deployment"
-	Evals       Context = "evals"
-	Jobs        Context = "jobs"
-
+	Allocs          Context = "allocs"
+	Deployments     Context = "deployment"
+	Evals           Context = "evals"
+	Jobs            Context = "jobs"
 	Nodes           Context = "nodes"
 	Namespaces      Context = "namespaces"
 	Quotas          Context = "quotas"
@@ -19,9 +18,6 @@ const (
 	Plugins         Context = "plugins"
 	Volumes         Context = "volumes"
 
-	// Union context types.
-	All Context = "all"
-
 	// Subtypes used in fuzzy matching.
 	Groups   Context = "groups"
 	Services Context = "services"
@@ -29,6 +25,9 @@ const (
 	Images   Context = "images"
 	Commands Context = "commands"
 	Classes  Context = "classes"
+
+	// Union context types.
+	All Context = "all"
 )
 
 // SearchConfig is used in servers to configure search API options.
