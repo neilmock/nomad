@@ -617,7 +617,7 @@ type SearchRequest struct {
 
 type FuzzyMatch struct {
 	ID    string   // ID is UUID or Name of object
-	Scope []string // IDs of parent objects
+	Scope []string `json:",omitempty"` // IDs of parent objects
 }
 
 type FuzzySearchResponse struct {

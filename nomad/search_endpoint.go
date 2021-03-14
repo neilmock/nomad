@@ -43,9 +43,9 @@ type Search struct {
 	logger log.Logger
 }
 
-// getMatches extracts matches for an iterator, and returns a list of ids for
+// getPrefixMatches extracts matches for an iterator, and returns a list of ids for
 // these matches.
-func (s *Search) getMatches(iter memdb.ResultIterator, prefix string) ([]string, bool) {
+func (s *Search) getPrefixMatches(iter memdb.ResultIterator, prefix string) ([]string, bool) {
 	var matches []string
 
 	for i := 0; i < truncateLimit; i++ {
@@ -97,9 +97,15 @@ func (s *Search) getMatches(iter memdb.ResultIterator, prefix string) ([]string,
 func (s *Search) getFuzzyMatches(iter memdb.ResultIterator, text string) (map[structs.Context][]structs.FuzzyMatch, bool) {
 	scoredMatches := make(map[structs.Context][]scoredMatch)
 
-	accumulate := func(m map[structs.Context][]scoredMatch) {
+	accumulateSet := func(m map[structs.Context][]scoredMatch) {
 		for ctx := range m {
 			scoredMatches[ctx] = append(scoredMatches[ctx], m[ctx]...)
+		}
+	}
+
+	accumulateSingle := func(ctx structs.Context, match *scoredMatch) {
+		if match != nil {
+			scoredMatches[ctx] = append(scoredMatches[ctx], *match)
 		}
 	}
 
@@ -111,9 +117,9 @@ func (s *Search) getFuzzyMatches(iter memdb.ResultIterator, text string) (map[st
 
 		switch t := raw.(type) {
 		case *structs.Job:
-			accumulate(s.fuzzyMatchesJob(t, text))
+			accumulateSet(s.fuzzyMatchesJob(t, text))
 		default:
-			panic("todo more types")
+			accumulateSingle(s.fuzzyMatchSingle(raw, text))
 		}
 	}
 
@@ -137,77 +143,50 @@ func (s *Search) getFuzzyMatches(iter memdb.ResultIterator, text string) (map[st
 	return m, iter.Next() != nil
 }
 
-func (s *Search) getFuzzyMatchesPlain(iter memdb.ResultIterator, text string) (structs.FuzzyMatch, bool) {
-	type match struct {
-		value string // the thing matched (e.g. job name)
-		pos   int    // the quality of result (lower is better)
+// fuzzySingleMatch determines if the ID of raw is a fuzzy match with text.
+// Returns the context and score or nil if there is no match.
+func (s *Search) fuzzyMatchSingle(raw interface{}, text string) (structs.Context, *scoredMatch) {
+	var (
+		name string
+		ctx  structs.Context
+	)
+
+	switch t := raw.(type) {
+	case *structs.Node:
+		name = t.Name
+		ctx = structs.Nodes
+	case *structs.Namespace:
+		name = t.Name
+		ctx = structs.Namespaces
+	case *structs.Allocation:
+		name = t.Name
+		ctx = structs.Allocs
+	case *structs.CSIPlugin:
+		name = t.ID
+		ctx = structs.Plugins
 	}
 
-	var matches []match
-
-	for i := 0; i < truncateLimit; i++ {
-		raw := iter.Next()
-		if raw == nil {
-			break
-		}
-
-		var name string
-
-		// need to build FuzzyMatch pointer
-
-		switch t := raw.(type) {
-		case *structs.Node:
-			name = t.Name
-		case *structs.Namespace:
-			name = t.Name
-		case *structs.Allocation:
-			name = t.Name
-		}
-
-		if idx := strings.Index(name, text); idx >= 0 {
-			matches = append(matches, match{
-				value: name,
-				pos:   idx,
-			})
+	if idx := strings.Index(name, text); idx >= 0 {
+		return ctx, &scoredMatch{
+			id:    name,
+			score: idx,
+			scope: nil, // currently no non-job sub-types need scoping
 		}
 	}
 
-	sort.Slice(matches, func(a, b int) bool {
-		A := matches[a]
-		B := matches[b]
-
-		switch {
-		case A.pos < B.pos:
-			return true
-		case B.pos < A.pos:
-			return false
-
-		case len(A.value) < len(B.value):
-			return true
-		case len(B.value) < len(A.value):
-			return false
-		}
-
-		return A.value < B.value
-	})
-
-	results := make([]structs.FuzzyMatch, 0, len(matches))
-	for _, m := range matches {
-		results = append(results, m.value)
-	}
-
-	return results, iter.Next() != nil
+	return "", nil
 }
 
 // getFuzzyMatchesJob digs through j and extracts matches against several types
-// of matchable Context. Results are categorized
+// of matchable Context. Results are categorized by Context and paired with their
+// score, but are unsorted.
 //
 //   job.name
 //   job|group.name
 //   job|group|service.name
 //   job|group|task.name
 //   job|group|task|service.name
-//   job|group|task|driver.{image,command}
+//   job|group|task|driver.{image,command,class}
 func (*Search) fuzzyMatchesJob(j *structs.Job, text string) map[structs.Context][]scoredMatch {
 	sm := make(map[structs.Context][]scoredMatch)
 	ns := j.Namespace
@@ -308,7 +287,9 @@ func sortScoredMatches(text string, matches []scoredMatch) {
 		}
 
 		// shorter length matched text is more likely to be the thing being
-		// searched for ... at least that's the theory
+		// searched for (in theory)
+		//
+		// this also causes exact matches to score best, which is desirable
 		idA, idB := A.id, B.id
 		switch {
 		case len(idA) < len(idB):
@@ -437,7 +418,7 @@ func (s *Search) PrefixSearch(args *structs.SearchRequest, reply *structs.Search
 
 			// Return matches for the given prefix
 			for k, v := range iters {
-				res, isTrunc := s.getMatches(v, args.Prefix)
+				res, isTrunc := s.getPrefixMatches(v, args.Prefix)
 				reply.Matches[k] = res
 				reply.Truncations[k] = isTrunc
 			}
@@ -461,15 +442,33 @@ func (s *Search) PrefixSearch(args *structs.SearchRequest, reply *structs.Search
 	return s.srv.blockingRPC(&opts)
 }
 
-// FuzzySearch is used to list fuzzy matches for a given string, and returns matching
-// jobs, nodes, namespaces, (etc?).
+// FuzzySearch is used to list fuzzy or prefix matches for a given text argument and Context.
+// If the Context is "all", all searchable contexts are searched. If ACLs are enabled,
+// results are limited to policies of the provided ACL token.
+//
+// These types are limited to prefix UUID searching:
+//   Evals, Deployments, ScalingPolicies, Volumes
+//
+// These types are available for fuzzy searching:
+//   Nodes, Namespaces, Jobs, Allocs, Plugins
+//
+// Jobs are a special case that expand into multiple types, and whose return
+// values include Scope which is a descending list of IDs of parent objects,
+// starting with the Namespace. The subtypes of jobs are fuzzy searchable.
+//
+// The Jobs type expands into these sub types:
+//   Jobs, Groups, Services, Tasks, Images, Commands, Classes
+//
+// The results are in descending order starting with strongest match, per Context type.
 func (s *Search) FuzzySearch(args *structs.FuzzySearchRequest, reply *structs.FuzzySearchResponse) error {
-	// validate here?
-
 	if done, err := s.srv.forward("Search.FuzzySearch", args, args, reply); done {
 		return err
 	}
 	defer metrics.MeasureSince([]string{"nomad", "search", "fuzzy_search"}, time.Now())
+
+	if len(args.Text) < 2 { // todo: configurable
+		return fmt.Errorf("fuzzy search query must be at least %d characters", 3)
+	}
 
 	aclObj, err := s.srv.ResolveToken(args.AuthToken)
 	if err != nil {
@@ -477,9 +476,7 @@ func (s *Search) FuzzySearch(args *structs.FuzzySearchRequest, reply *structs.Fu
 	}
 
 	namespace := args.RequestNamespace()
-
-	// todo: able to choose?
-	context := structs.Jobs // structs.All
+	context := args.Context
 
 	if !sufficientSearchPerms(aclObj, namespace, context) {
 		return structs.ErrPermissionDenied
@@ -494,27 +491,44 @@ func (s *Search) FuzzySearch(args *structs.FuzzySearchRequest, reply *structs.Fu
 		queryOpts: new(structs.QueryOptions),
 		run: func(ws memdb.WatchSet, state *state.StateStore) error {
 
-			iters := make(map[structs.Context]memdb.ResultIterator)
-
-			// pass in Context ?
+			fuzzyIters := make(map[structs.Context]memdb.ResultIterator)
+			prefixIters := make(map[structs.Context]memdb.ResultIterator)
 			contexts := expandSearchContexts(aclObj, namespace, context)
-			fmt.Println("contexts:", contexts)
 
 			for _, ctx := range contexts {
-				iter, err := getResourceIter(ctx, aclObj, namespace, "", ws, state)
-				if err != nil {
-					return err
+				switch ctx {
+				// types that use UUID prefix searching
+				case structs.Evals, structs.Deployments, structs.ScalingPolicies, structs.Volumes:
+					iter, err := getResourceIter(ctx, aclObj, namespace, roundUUIDDownIfOdd(args.Prefix, args.Context), ws, state)
+					if err != nil {
+						return err
+					}
+					prefixIters[ctx] = iter
+
+				// types that use fuzzy searching
+				default:
+					iter, err := getResourceIter(ctx, aclObj, namespace, "", ws, state)
+					if err != nil {
+						return err
+					}
+					fuzzyIters[ctx] = iter
 				}
-				iters[ctx] = iter
 			}
 
-			// The term we are searching for
-			// todo: minimum length
-			text := args.Text
+			// Set prefix matches of the given text
+			for ctx, iter := range prefixIters {
+				res, isTrunc := s.getPrefixMatches(iter, args.Text)
+				matches := make([]structs.FuzzyMatch, 0, len(res))
+				for _, result := range res {
+					matches = append(matches, structs.FuzzyMatch{ID: result})
+				}
+				reply.Matches[ctx] = matches
+				reply.Truncations[ctx] = isTrunc
+			}
 
-			// Return fuzzy matches from iter for the given text
-			for _, iter := range iters {
-				matches, isTrunc := s.getFuzzyMatches(iter, text)
+			// Set fuzzy matches of the given text
+			for _, iter := range fuzzyIters {
+				matches, isTrunc := s.getFuzzyMatches(iter, args.Text)
 				for ctx := range matches {
 					reply.Matches[ctx] = matches[ctx]
 					reply.Truncations[ctx] = isTrunc
@@ -543,8 +557,6 @@ func (s *Search) FuzzySearch(args *structs.FuzzySearchRequest, reply *structs.Fu
 }
 
 func expandContext(context structs.Context) []structs.Context {
-	fmt.Println("expand:", context)
-
 	switch context {
 	case structs.All:
 		c := make([]structs.Context, len(allContexts))
