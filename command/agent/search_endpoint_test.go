@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/nomad/mock"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/stretchr/testify/require"
@@ -40,7 +41,16 @@ func createJobForTest(jobID string, s *TestAgent, t *testing.T) {
 	job := mock.Job()
 	job.ID = jobID
 	job.TaskGroups[0].Count = 1
+	state := s.Agent.server.State()
+	err := state.UpsertJob(structs.MsgTypeTestSetup, 1000, job)
+	require.NoError(t, err)
+}
 
+func createCmdJobForTest(name, cmd string, s *TestAgent, t *testing.T) {
+	job := mock.Job()
+	job.Name = name
+	job.TaskGroups[0].Tasks[0].Config["command"] = cmd
+	job.TaskGroups[0].Count = 1
 	state := s.Agent.server.State()
 	err := state.UpsertJob(structs.MsgTypeTestSetup, 1000, job)
 	require.NoError(t, err)
@@ -78,7 +88,7 @@ func TestHTTP_PrefixSearch_POST(t *testing.T) {
 func TestHTTP_FuzzySearch_POST(t *testing.T) {
 	t.Parallel()
 
-	testJobID := "5b22ef21-1c21-e2f0-9d49-e7118f084a64"
+	testJobID := uuid.Generate()
 
 	httpTest(t, nil, func(s *TestAgent) {
 		createJobForTest(testJobID, s, t)
@@ -131,6 +141,33 @@ func TestHTTP_PrefixSearch_PUT(t *testing.T) {
 	})
 }
 
+func TestHTTP_FuzzySearch_PUT(t *testing.T) {
+	t.Parallel()
+
+	testJobID := uuid.Generate()
+
+	httpTest(t, nil, func(s *TestAgent) {
+		createJobForTest(testJobID, s, t)
+		data := structs.FuzzySearchRequest{Text: "fau", Context: structs.Namespaces}
+		req, err := http.NewRequest("PUT", "/v1/search/fuzzy", encodeReq(data))
+		require.NoError(t, err)
+
+		respW := httptest.NewRecorder()
+
+		resp, err := s.Server.FuzzySearchRequest(respW, req)
+		require.NoError(t, err)
+
+		res := resp.(structs.FuzzySearchResponse)
+		require.Len(t, res.Matches, 1) // searched one context: namespaces
+
+		ns := res.Matches[structs.Namespaces]
+		require.Len(t, ns, 1)
+
+		require.Equal(t, "default", ns[0].ID)
+		require.Nil(t, ns[0].Scope) // only job types have scope
+	})
+}
+
 func TestHTTP_PrefixSearch_MultipleJobs(t *testing.T) {
 	t.Parallel()
 
@@ -164,6 +201,46 @@ func TestHTTP_PrefixSearch_MultipleJobs(t *testing.T) {
 
 		require.False(t, res.Truncations[structs.Jobs])
 		require.NotEqual(t, "0", respW.HeaderMap.Get("X-Nomad-Index"))
+	})
+}
+
+func TestHTTP_FuzzySearch_MultipleJobs(t *testing.T) {
+	t.Parallel()
+
+	httpTest(t, nil, func(s *TestAgent) {
+		createCmdJobForTest("job1", "/bin/yes", s, t)
+		createCmdJobForTest("job2", "/bin/no", s, t)
+		createCmdJobForTest("job3", "/opt/java", s, t) // no match
+		createCmdJobForTest("job4", "/sbin/ping", s, t)
+
+		data := structs.FuzzySearchRequest{Text: "bin", Context: structs.Jobs}
+		req, err := http.NewRequest("POST", "/v1/search/fuzzy", encodeReq(data))
+		require.NoError(t, err)
+
+		respW := httptest.NewRecorder()
+
+		resp, err := s.Server.FuzzySearchRequest(respW, req)
+		require.NoError(t, err)
+
+		// in example job, only the commands match the "bin" query
+
+		res := resp.(structs.FuzzySearchResponse)
+		require.Len(t, res.Matches, 1)
+
+		cmds := res.Matches[structs.Commands]
+		require.Len(t, cmds, 3)
+
+		exp := []structs.FuzzyMatch{{
+			ID:    "/bin/no",
+			Scope: []string{"default", "job2", "web", "web"},
+		}, {
+			ID:    "/bin/yes",
+			Scope: []string{"default", "job1", "web", "web"},
+		}, {
+			ID:    "/sbin/ping",
+			Scope: []string{"default", "job4", "web", "web"},
+		}}
+		require.Equal(t, exp, cmds)
 	})
 }
 
