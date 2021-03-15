@@ -384,9 +384,12 @@ func roundUUIDDownIfOdd(prefix string, context structs.Context) string {
 	return prefix[:len(prefix)-1]
 }
 
-func (*Search) filterError(err error) error {
+// silenceError determines whether err is an error we care about when getting an
+// iterator from the state store - we ignore errors about invalid UUIDs, since
+// we sometimes try to lookup by Name and not UUID.
+func (*Search) silenceError(err error) bool {
 	if err == nil {
-		return nil
+		return true
 	}
 
 	e := err.Error()
@@ -398,11 +401,11 @@ func (*Search) filterError(err error) error {
 	case strings.Contains(e, "must be even length"):
 	case strings.Contains(e, "UUID should have maximum of 4"):
 	default:
-		fmt.Println("filterError unfiltered:", err)
-		return err
+		return true
 	}
 
-	return nil
+	// err was not nil and not about UUID prefix, something bad happened
+	return false
 }
 
 // PrefixSearch is used to list matches for a given prefix, and returns
@@ -440,7 +443,7 @@ func (s *Search) PrefixSearch(args *structs.SearchRequest, reply *structs.Search
 
 			for _, ctx := range contexts {
 				iter, err := getResourceIter(ctx, aclObj, namespace, roundUUIDDownIfOdd(args.Prefix, args.Context), ws, state)
-				if s.filterError(err) != nil {
+				if err != nil && !s.silenceError(err) {
 					return err
 				} else {
 					fmt.Println("set context:", ctx, "iter:", iter)
@@ -535,7 +538,7 @@ func (s *Search) FuzzySearch(args *structs.FuzzySearchRequest, reply *structs.Fu
 				// types that use UUID prefix searching
 				case structs.Evals, structs.Deployments, structs.ScalingPolicies, structs.Volumes:
 					iter, err := getResourceIter(ctx, aclObj, namespace, roundUUIDDownIfOdd(args.Prefix, args.Context), ws, state)
-					if s.filterError(err) != nil {
+					if err != nil && !s.silenceError(err) {
 						return err
 					}
 					prefixIters[ctx] = iter
