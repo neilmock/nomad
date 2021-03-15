@@ -526,9 +526,13 @@ func (s *Search) FuzzySearch(args *structs.FuzzySearchRequest, reply *structs.Fu
 	}
 	defer metrics.MeasureSince([]string{"nomad", "search", "fuzzy_search"}, time.Now())
 
-	min := s.srv.config.SearchConfig.MinTermLength
-	fmt.Println("min:", min, "len:", len(args.Text))
+	// check that fuzzy search API is enabled
+	if !s.srv.config.SearchConfig.FuzzyEnabled {
+		return fmt.Errorf("fuzzy search is not enabled")
+	}
 
+	// check the query term meets minimum length
+	min := s.srv.config.SearchConfig.MinTermLength
 	if n := len(args.Text); n < min {
 		return fmt.Errorf("fuzzy search query must be at least %d characters, got %d", min, n)
 	}

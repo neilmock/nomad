@@ -348,9 +348,7 @@ func TestSearch_PrefixSearch_Evals(t *testing.T) {
 	}
 
 	var resp structs.SearchResponse
-	if err := msgpackrpc.CallWithCodec(codec, "Search.PrefixSearch", req, &resp); err != nil {
-		t.Fatalf("err: %v", err)
-	}
+	require.NoError(t, msgpackrpc.CallWithCodec(codec, "Search.PrefixSearch", req, &resp))
 
 	require.Len(t, resp.Matches[structs.Evals], 1)
 	require.Equal(t, eval1.ID, resp.Matches[structs.Evals][0])
@@ -413,15 +411,11 @@ func TestSearch_PrefixSearch_All_UUID(t *testing.T) {
 	require.NoError(t, fsmState.UpsertAllocs(structs.MsgTypeTestSetup, 1000, []*structs.Allocation{alloc}))
 
 	node := mock.Node()
-	if err := fsmState.UpsertNode(structs.MsgTypeTestSetup, 1001, node); err != nil {
-		t.Fatalf("err: %v", err)
-	}
+	require.NoError(t, fsmState.UpsertNode(structs.MsgTypeTestSetup, 1001, node))
 
 	eval1 := mock.Eval()
 	eval1.ID = node.ID
-	if err := fsmState.UpsertEvals(structs.MsgTypeTestSetup, 1002, []*structs.Evaluation{eval1}); err != nil {
-		t.Fatalf("err: %v", err)
-	}
+	require.NoError(t, fsmState.UpsertEvals(structs.MsgTypeTestSetup, 1002, []*structs.Evaluation{eval1}))
 
 	req := &structs.SearchRequest{
 		Context: structs.All,
@@ -1056,6 +1050,34 @@ func TestSearch_FuzzySearch_ACL(t *testing.T) {
 	}
 }
 
+func TestSearch_FuzzySearch_NotEnabled(t *testing.T) {
+	t.Parallel()
+
+	s, cleanupS := TestServer(t, func(c *Config) {
+		c.NumSchedulers = 0
+		c.SearchConfig.FuzzyEnabled = false
+	})
+	defer cleanupS()
+	codec := rpcClient(t, s)
+	testutil.WaitForLeader(t, s.RPC)
+	fsmState := s.fsm.State()
+
+	job := mock.Job()
+	registerJob(s, t, job)
+
+	require.NoError(t, fsmState.UpsertNode(structs.MsgTypeTestSetup, 1001, mock.Node()))
+
+	req := &structs.FuzzySearchRequest{
+		Text:         "foo", // min set to 5
+		Context:      structs.Jobs,
+		QueryOptions: structs.QueryOptions{Region: "global", Namespace: job.Namespace},
+	}
+
+	var resp structs.FuzzySearchResponse
+	require.EqualError(t, msgpackrpc.CallWithCodec(codec, "Search.FuzzySearch", req, &resp),
+		"fuzzy search is not enabled")
+}
+
 func TestSearch_FuzzySearch_ShortText(t *testing.T) {
 	t.Parallel()
 
@@ -1084,7 +1106,7 @@ func TestSearch_FuzzySearch_ShortText(t *testing.T) {
 		"fuzzy search query must be at least 5 characters, got 3")
 }
 
-func TestSearch_FuzzySearch_Truncate(t *testing.T) {
+func TestSearch_FuzzySearch_TruncateLimitQuery(t *testing.T) {
 	t.Parallel()
 
 	s, cleanupS := TestServer(t, func(c *Config) {
@@ -1115,6 +1137,274 @@ func TestSearch_FuzzySearch_Truncate(t *testing.T) {
 	require.Len(t, resp.Matches[structs.Jobs], 20)
 	require.True(t, resp.Truncations[structs.Jobs])
 	require.Equal(t, uint64(jobIndex), resp.Index)
+}
+
+func TestSearch_FuzzySearch_TruncateLimitResults(t *testing.T) {
+	t.Parallel()
+
+	s, cleanupS := TestServer(t, func(c *Config) {
+		c.NumSchedulers = 0
+		c.SearchConfig.LimitQuery = 10000
+		c.SearchConfig.LimitResults = 5
+	})
+	defer cleanupS()
+	codec := rpcClient(t, s)
+	testutil.WaitForLeader(t, s.RPC)
+	fsmState := s.fsm.State()
+
+	require.NoError(t, fsmState.UpsertNode(structs.MsgTypeTestSetup, 1001, mock.Node()))
+
+	req := &structs.FuzzySearchRequest{
+		Text:         "job",
+		Context:      structs.Jobs,
+		QueryOptions: structs.QueryOptions{Region: "global", Namespace: "default"},
+	}
+
+	for i := 0; i < 25; i++ {
+		job := mock.Job()
+		job.Name = fmt.Sprintf("my-job-%d", i)
+		registerJob(s, t, job)
+	}
+
+	var resp structs.FuzzySearchResponse
+	require.NoError(t, msgpackrpc.CallWithCodec(codec, "Search.FuzzySearch", req, &resp))
+
+	require.Len(t, resp.Matches[structs.Jobs], 5)
+	require.True(t, resp.Truncations[structs.Jobs])
+	require.Equal(t, uint64(jobIndex), resp.Index)
+}
+
+func TestSearch_FuzzySearch_Evals(t *testing.T) {
+	t.Parallel()
+
+	s, cleanupS := TestServer(t, func(c *Config) {
+		c.NumSchedulers = 0
+	})
+	defer cleanupS()
+	codec := rpcClient(t, s)
+	testutil.WaitForLeader(t, s.RPC)
+
+	eval1 := mock.Eval()
+	eval1.ID = "f7dee5a1-d2b0-2f6a-2e75-6c8e467a4b99"
+	require.NoError(t, s.fsm.State().UpsertEvals(structs.MsgTypeTestSetup, 2000, []*structs.Evaluation{eval1}))
+
+	req := &structs.FuzzySearchRequest{
+		Text:    "f7dee", // evals are prefix searched
+		Context: structs.Evals,
+		QueryOptions: structs.QueryOptions{
+			Region:    "global",
+			Namespace: eval1.Namespace,
+		},
+	}
+
+	var resp structs.FuzzySearchResponse
+	require.NoError(t, msgpackrpc.CallWithCodec(codec, "Search.FuzzySearch", req, &resp))
+
+	require.Len(t, resp.Matches[structs.Evals], 1)
+	require.Equal(t, eval1.ID, resp.Matches[structs.Evals][0].ID)
+	require.False(t, resp.Truncations[structs.Evals])
+	require.Equal(t, uint64(2000), resp.Index)
+}
+
+func TestSearch_FuzzySearch_Allocation(t *testing.T) {
+	t.Parallel()
+
+	s, cleanupS := TestServer(t, func(c *Config) {
+		c.NumSchedulers = 0
+	})
+	defer cleanupS()
+	codec := rpcClient(t, s)
+	testutil.WaitForLeader(t, s.RPC)
+
+	alloc := mock.Alloc()
+	summary := mock.JobSummary(alloc.JobID)
+	fsmState := s.fsm.State()
+
+	require.NoError(t, fsmState.UpsertJobSummary(999, summary))
+	require.NoError(t, fsmState.UpsertAllocs(structs.MsgTypeTestSetup, 90, []*structs.Allocation{alloc}))
+
+	fmt.Println("ALLOC NAME:", alloc.Name)
+
+	req := &structs.FuzzySearchRequest{
+		Text:    "web",
+		Context: structs.Allocs,
+		QueryOptions: structs.QueryOptions{
+			Region:    "global",
+			Namespace: alloc.Namespace,
+		},
+	}
+
+	var resp structs.FuzzySearchResponse
+	require.NoError(t, msgpackrpc.CallWithCodec(codec, "Search.FuzzySearch", req, &resp))
+
+	require.Len(t, resp.Matches[structs.Allocs], 1)
+	require.Equal(t, alloc.Name, resp.Matches[structs.Allocs][0].ID)
+	require.False(t, resp.Truncations[structs.Allocs])
+	require.Equal(t, uint64(90), resp.Index)
+}
+
+func TestSearch_FuzzySearch_Node(t *testing.T) {
+	t.Parallel()
+
+	s, cleanupS := TestServer(t, func(c *Config) {
+		c.NumSchedulers = 0
+	})
+	defer cleanupS()
+	codec := rpcClient(t, s)
+	testutil.WaitForLeader(t, s.RPC)
+
+	fsmState := s.fsm.State()
+	node := mock.Node()
+
+	require.NoError(t, fsmState.UpsertNode(structs.MsgTypeTestSetup, 100, node))
+
+	req := &structs.FuzzySearchRequest{
+		Text:    "oo",
+		Context: structs.Nodes,
+		QueryOptions: structs.QueryOptions{
+			Region:    "global",
+			Namespace: structs.DefaultNamespace,
+		},
+	}
+
+	var resp structs.FuzzySearchResponse
+	require.NoError(t, msgpackrpc.CallWithCodec(codec, "Search.FuzzySearch", req, &resp))
+	require.Len(t, resp.Matches[structs.Nodes], 1)
+	require.Equal(t, node.Name, resp.Matches[structs.Nodes][0].ID)
+	require.False(t, resp.Truncations[structs.Nodes])
+	require.Equal(t, uint64(100), resp.Index)
+}
+
+func TestSearch_FuzzySearch_Deployment(t *testing.T) {
+	t.Parallel()
+
+	s, cleanupS := TestServer(t, func(c *Config) {
+		c.NumSchedulers = 0
+	})
+	defer cleanupS()
+	codec := rpcClient(t, s)
+	testutil.WaitForLeader(t, s.RPC)
+
+	deployment := mock.Deployment()
+	require.NoError(t, s.fsm.State().UpsertDeployment(2000, deployment))
+
+	req := &structs.FuzzySearchRequest{
+		Text:    deployment.ID[0:3], // deployments are prefix searched
+		Context: structs.Deployments,
+		QueryOptions: structs.QueryOptions{
+			Region:    "global",
+			Namespace: deployment.Namespace,
+		},
+	}
+
+	var resp structs.FuzzySearchResponse
+	require.NoError(t, msgpackrpc.CallWithCodec(codec, "Search.FuzzySearch", req, &resp))
+	require.Len(t, resp.Matches[structs.Deployments], 1)
+	require.Equal(t, deployment.ID, resp.Matches[structs.Deployments][0].ID)
+	require.False(t, resp.Truncations[structs.Deployments])
+	require.Equal(t, uint64(2000), resp.Index)
+}
+
+func TestSearch_FuzzySearch_CSIPlugin(t *testing.T) {
+	t.Parallel()
+
+	s, cleanupS := TestServer(t, func(c *Config) {
+		c.NumSchedulers = 0
+	})
+	defer cleanupS()
+	codec := rpcClient(t, s)
+	testutil.WaitForLeader(t, s.RPC)
+
+	state.CreateTestCSIPlugin(s.fsm.State(), "my-plugin")
+
+	req := &structs.FuzzySearchRequest{
+		Text:    "lug",
+		Context: structs.Plugins,
+		QueryOptions: structs.QueryOptions{
+			Region: "global",
+		},
+	}
+
+	var resp structs.FuzzySearchResponse
+	require.NoError(t, msgpackrpc.CallWithCodec(codec, "Search.FuzzySearch", req, &resp))
+
+	require.Len(t, resp.Matches[structs.Plugins], 1)
+	require.Equal(t, "my-plugin", resp.Matches[structs.Plugins][0].ID)
+	require.False(t, resp.Truncations[structs.Plugins])
+}
+
+func TestSearch_FuzzySearch_CSIVolume(t *testing.T) {
+	t.Parallel()
+
+	s, cleanupS := TestServer(t, func(c *Config) {
+		c.NumSchedulers = 0
+	})
+	defer cleanupS()
+	codec := rpcClient(t, s)
+	testutil.WaitForLeader(t, s.RPC)
+
+	id := uuid.Generate()
+	err := s.fsm.State().CSIVolumeRegister(1000, []*structs.CSIVolume{{
+		ID:        id,
+		Namespace: structs.DefaultNamespace,
+		PluginID:  "glade",
+	}})
+	require.NoError(t, err)
+
+	req := &structs.FuzzySearchRequest{
+		Text:    id[0:3], // volumes are prefix searched
+		Context: structs.Volumes,
+		QueryOptions: structs.QueryOptions{
+			Region:    "global",
+			Namespace: structs.DefaultNamespace,
+		},
+	}
+
+	var resp structs.FuzzySearchResponse
+	require.NoError(t, msgpackrpc.CallWithCodec(codec, "Search.FuzzySearch", req, &resp))
+
+	require.Len(t, resp.Matches[structs.Volumes], 1)
+	require.Equal(t, id, resp.Matches[structs.Volumes][0].ID)
+	require.False(t, resp.Truncations[structs.Volumes])
+}
+
+func TestSearch_FuzzySearch_Namespace(t *testing.T) {
+	t.Parallel()
+
+	s, cleanup := TestServer(t, func(c *Config) {
+		c.NumSchedulers = 0
+	})
+
+	defer cleanup()
+	codec := rpcClient(t, s)
+	testutil.WaitForLeader(t, s.RPC)
+
+	ns := mock.Namespace()
+	require.NoError(t, s.fsm.State().UpsertNamespaces(2000, []*structs.Namespace{ns}))
+
+	req := &structs.FuzzySearchRequest{
+		Text:    "am", // mock is team-<uuid>
+		Context: structs.Namespaces,
+		QueryOptions: structs.QueryOptions{
+			Region: "global",
+		},
+	}
+
+	var resp structs.FuzzySearchResponse
+	require.NoError(t, msgpackrpc.CallWithCodec(codec, "Search.FuzzySearch", req, &resp))
+
+	require.Len(t, resp.Matches[structs.Namespaces], 1)
+	require.Equal(t, ns.Name, resp.Matches[structs.Namespaces][0].ID)
+	require.False(t, resp.Truncations[structs.Namespaces])
+	require.Equal(t, uint64(2000), resp.Index)
+}
+
+func TestSearch_FuzzySearch_ScalingPolicy(t *testing.T) {
+	// todo
+}
+
+func TestSearch_FuzzySearch_Namespace_ACL(t *testing.T) {
+	// todo
 }
 
 func TestSearch_FuzzySearch_Job(t *testing.T) {
