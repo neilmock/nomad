@@ -444,6 +444,7 @@ func (s *Search) PrefixSearch(args *structs.SearchRequest, reply *structs.Search
 
 			for _, ctx := range contexts {
 				iter, err := getResourceIter(ctx, aclObj, namespace, roundUUIDDownIfOdd(args.Prefix, args.Context), ws, state)
+				fmt.Println("getRI ctx:", ctx, "prefix:", args.Prefix, "aCtx:", args.Context, "iter:", iter, "err:", err)
 				if err != nil && !s.silenceError(err) {
 					return err
 				} else {
