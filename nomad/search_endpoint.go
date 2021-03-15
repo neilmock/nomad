@@ -48,6 +48,8 @@ type Search struct {
 func (s *Search) getPrefixMatches(iter memdb.ResultIterator, prefix string) ([]string, bool) {
 	var matches []string
 
+	fmt.Println("SH getPrefixMatches, iter:", iter, "prefix:", prefix)
+
 	for i := 0; i < truncateLimit; i++ {
 		raw := iter.Next()
 		if raw == nil {
@@ -383,19 +385,23 @@ func roundUUIDDownIfOdd(prefix string, context structs.Context) string {
 }
 
 func (*Search) filterError(err error) error {
-	if err != nil {
-		e := err.Error()
-		switch {
-		// Searching other contexts with job names raises an error, which in
-		// this case we want to ignore.
-		case strings.Contains(e, "Invalid UUID: encoding/hex"):
-		case strings.Contains(e, "UUID have 36 characters"):
-		case strings.Contains(e, "must be even length"):
-		case strings.Contains(e, "UUID should have maximum of 4"):
-		default:
-			return err
-		}
+	if err == nil {
+		return nil
 	}
+
+	e := err.Error()
+	switch {
+	// Searching other contexts with job names raises an error, which in
+	// this case we want to ignore.
+	case strings.Contains(e, "Invalid UUID: encoding/hex"):
+	case strings.Contains(e, "UUID have 36 characters"):
+	case strings.Contains(e, "must be even length"):
+	case strings.Contains(e, "UUID should have maximum of 4"):
+	default:
+		fmt.Println("filterError unfiltered:", err)
+		return err
+	}
+
 	return nil
 }
 
@@ -437,6 +443,7 @@ func (s *Search) PrefixSearch(args *structs.SearchRequest, reply *structs.Search
 				if s.filterError(err) != nil {
 					return err
 				} else {
+					fmt.Println("set context:", ctx, "iter:", iter)
 					iters[ctx] = iter
 				}
 			}

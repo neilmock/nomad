@@ -21,17 +21,14 @@ const jobIndex = 1000
 func registerAndVerifyJob(s *Server, t *testing.T, prefix string, counter int) *structs.Job {
 	job := mock.Job()
 	job.ID = prefix + strconv.Itoa(counter)
-	state := s.fsm.State()
-	if err := state.UpsertJob(structs.MsgTypeTestSetup, jobIndex, job); err != nil {
-		t.Fatalf("err: %v", err)
-	}
-
+	fsmState := s.fsm.State()
+	require.NoError(t, fsmState.UpsertJob(structs.MsgTypeTestSetup, jobIndex, job))
 	return job
 }
 
 func TestSearch_PrefixSearch_Job(t *testing.T) {
 	t.Parallel()
-	assert := assert.New(t)
+
 	prefix := "aaaaaaaa-e8f7-fd38-c855-ab94ceb8970"
 
 	s, cleanupS := TestServer(t, func(c *Config) {
@@ -57,14 +54,14 @@ func TestSearch_PrefixSearch_Job(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 
-	assert.Equal(1, len(resp.Matches[structs.Jobs]))
-	assert.Equal(job.ID, resp.Matches[structs.Jobs][0])
-	assert.Equal(uint64(jobIndex), resp.Index)
+	require.Len(t, resp.Matches[structs.Jobs], 1)
+	require.Equal(t, job.ID, resp.Matches[structs.Jobs][0])
+	require.Equal(t, uint64(jobIndex), resp.Index)
 }
 
 func TestSearch_PrefixSearch_ACL(t *testing.T) {
 	t.Parallel()
-	assert := assert.New(t)
+
 	jobID := "aaaaaaaa-e8f7-fd38-c855-ab94ceb8970"
 
 	s, root, cleanupS := TestACLServer(t, func(c *Config) {
@@ -73,10 +70,10 @@ func TestSearch_PrefixSearch_ACL(t *testing.T) {
 	defer cleanupS()
 	codec := rpcClient(t, s)
 	testutil.WaitForLeader(t, s.RPC)
-	state := s.fsm.State()
+	fsmState := s.fsm.State()
 
 	job := registerAndVerifyJob(s, t, jobID, 0)
-	assert.Nil(state.UpsertNode(structs.MsgTypeTestSetup, 1001, mock.Node()))
+	require.NoError(t, fsmState.UpsertNode(structs.MsgTypeTestSetup, 1001, mock.Node()))
 
 	req := &structs.SearchRequest{
 		Prefix:  "",
@@ -91,94 +88,90 @@ func TestSearch_PrefixSearch_ACL(t *testing.T) {
 	{
 		var resp structs.SearchResponse
 		err := msgpackrpc.CallWithCodec(codec, "Search.PrefixSearch", req, &resp)
-		assert.NotNil(err)
-		assert.Equal(err.Error(), structs.ErrPermissionDenied.Error())
+		require.EqualError(t, err, structs.ErrPermissionDenied.Error())
 	}
 
 	// Try with an invalid token and expect failure
 	{
-		invalidToken := mock.CreatePolicyAndToken(t, state, 1003, "test-invalid",
+		invalidToken := mock.CreatePolicyAndToken(t, fsmState, 1003, "test-invalid",
 			mock.NamespacePolicy(structs.DefaultNamespace, "", []string{acl.NamespaceCapabilityListJobs}))
 		req.AuthToken = invalidToken.SecretID
 		var resp structs.SearchResponse
 		err := msgpackrpc.CallWithCodec(codec, "Search.PrefixSearch", req, &resp)
-		assert.NotNil(err)
-		assert.Equal(err.Error(), structs.ErrPermissionDenied.Error())
+		require.EqualError(t, err, structs.ErrPermissionDenied.Error())
 	}
 
 	// Try with a node:read token and expect failure due to Jobs being the context
 	{
-		validToken := mock.CreatePolicyAndToken(t, state, 1005, "test-invalid2", mock.NodePolicy(acl.PolicyRead))
+		validToken := mock.CreatePolicyAndToken(t, fsmState, 1005, "test-invalid2", mock.NodePolicy(acl.PolicyRead))
 		req.AuthToken = validToken.SecretID
 		var resp structs.SearchResponse
 		err := msgpackrpc.CallWithCodec(codec, "Search.PrefixSearch", req, &resp)
-		assert.NotNil(err)
-		assert.Equal(err.Error(), structs.ErrPermissionDenied.Error())
+		require.EqualError(t, err, structs.ErrPermissionDenied.Error())
 	}
 
 	// Try with a node:read token and expect success due to All context
 	{
-		validToken := mock.CreatePolicyAndToken(t, state, 1007, "test-valid", mock.NodePolicy(acl.PolicyRead))
+		validToken := mock.CreatePolicyAndToken(t, fsmState, 1007, "test-valid", mock.NodePolicy(acl.PolicyRead))
 		req.Context = structs.All
 		req.AuthToken = validToken.SecretID
 		var resp structs.SearchResponse
-		assert.Nil(msgpackrpc.CallWithCodec(codec, "Search.PrefixSearch", req, &resp))
-		assert.Equal(uint64(1001), resp.Index)
-		assert.Len(resp.Matches[structs.Nodes], 1)
+		require.NoError(t, msgpackrpc.CallWithCodec(codec, "Search.PrefixSearch", req, &resp))
+		require.Equal(t, uint64(1001), resp.Index)
+		require.Len(t, resp.Matches[structs.Nodes], 1)
 
 		// Jobs filtered out since token only has access to node:read
-		assert.Len(resp.Matches[structs.Jobs], 0)
+		require.Len(t, resp.Matches[structs.Jobs], 0)
 	}
 
 	// Try with a valid token for namespace:read-job
 	{
-		validToken := mock.CreatePolicyAndToken(t, state, 1009, "test-valid2",
+		validToken := mock.CreatePolicyAndToken(t, fsmState, 1009, "test-valid2",
 			mock.NamespacePolicy(structs.DefaultNamespace, "", []string{acl.NamespaceCapabilityReadJob}))
 		req.AuthToken = validToken.SecretID
 		var resp structs.SearchResponse
-		assert.Nil(msgpackrpc.CallWithCodec(codec, "Search.PrefixSearch", req, &resp))
-		assert.Len(resp.Matches[structs.Jobs], 1)
-		assert.Equal(job.ID, resp.Matches[structs.Jobs][0])
+		require.NoError(t, msgpackrpc.CallWithCodec(codec, "Search.PrefixSearch", req, &resp))
+		require.Len(t, resp.Matches[structs.Jobs], 1)
+		require.Equal(t, job.ID, resp.Matches[structs.Jobs][0])
 
 		// Index of job - not node - because node context is filtered out
-		assert.Equal(uint64(1000), resp.Index)
+		require.Equal(t, uint64(1000), resp.Index)
 
 		// Nodes filtered out since token only has access to namespace:read-job
-		assert.Len(resp.Matches[structs.Nodes], 0)
+		require.Len(t, resp.Matches[structs.Nodes], 0)
 	}
 
 	// Try with a valid token for node:read and namespace:read-job
 	{
-		validToken := mock.CreatePolicyAndToken(t, state, 1011, "test-valid3", strings.Join([]string{
+		validToken := mock.CreatePolicyAndToken(t, fsmState, 1011, "test-valid3", strings.Join([]string{
 			mock.NamespacePolicy(structs.DefaultNamespace, "", []string{acl.NamespaceCapabilityReadJob}),
 			mock.NodePolicy(acl.PolicyRead),
 		}, "\n"))
 		req.AuthToken = validToken.SecretID
 		var resp structs.SearchResponse
-		assert.Nil(msgpackrpc.CallWithCodec(codec, "Search.PrefixSearch", req, &resp))
-		assert.Len(resp.Matches[structs.Jobs], 1)
-		assert.Equal(job.ID, resp.Matches[structs.Jobs][0])
-		assert.Len(resp.Matches[structs.Nodes], 1)
-		assert.Equal(uint64(1001), resp.Index)
+		require.NoError(t, msgpackrpc.CallWithCodec(codec, "Search.PrefixSearch", req, &resp))
+		require.Len(t, resp.Matches[structs.Jobs], 1)
+		require.Equal(t, job.ID, resp.Matches[structs.Jobs][0])
+		require.Len(t, resp.Matches[structs.Nodes], 1)
+		require.Equal(t, uint64(1001), resp.Index)
 	}
 
 	// Try with a management token
 	{
 		req.AuthToken = root.SecretID
 		var resp structs.SearchResponse
-		assert.Nil(msgpackrpc.CallWithCodec(codec, "Search.PrefixSearch", req, &resp))
-		assert.Equal(uint64(1001), resp.Index)
-		assert.Len(resp.Matches[structs.Jobs], 1)
-		assert.Equal(job.ID, resp.Matches[structs.Jobs][0])
-		assert.Len(resp.Matches[structs.Nodes], 1)
+		require.NoError(t, msgpackrpc.CallWithCodec(codec, "Search.PrefixSearch", req, &resp))
+		require.Equal(t, uint64(1001), resp.Index)
+		require.Len(t, resp.Matches[structs.Jobs], 1)
+		require.Equal(t, job.ID, resp.Matches[structs.Jobs][0])
+		require.Len(t, resp.Matches[structs.Nodes], 1)
 	}
 }
 
 func TestSearch_PrefixSearch_All_JobWithHyphen(t *testing.T) {
 	t.Parallel()
-	assert := assert.New(t)
-	prefix := "example-test-------" // Assert that a job with more than 4 hyphens works
 
+	prefix := "example-test-------" // Assert that a job with more than 4 hyphens works
 	s, cleanupS := TestServer(t, func(c *Config) {
 		c.NumSchedulers = 0
 	})
@@ -192,12 +185,12 @@ func TestSearch_PrefixSearch_All_JobWithHyphen(t *testing.T) {
 	alloc.JobID = job.ID
 	alloc.Namespace = job.Namespace
 	summary := mock.JobSummary(alloc.JobID)
-	state := s.fsm.State()
+	fsmState := s.fsm.State()
 
-	if err := state.UpsertJobSummary(999, summary); err != nil {
+	if err := fsmState.UpsertJobSummary(999, summary); err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	if err := state.UpsertAllocs(structs.MsgTypeTestSetup, 1000, []*structs.Allocation{alloc}); err != nil {
+	if err := fsmState.UpsertAllocs(structs.MsgTypeTestSetup, 1000, []*structs.Allocation{alloc}); err != nil {
 		t.Fatalf("err: %v", err)
 	}
 
@@ -213,10 +206,10 @@ func TestSearch_PrefixSearch_All_JobWithHyphen(t *testing.T) {
 	for i := 1; i < len(prefix); i++ {
 		req.Prefix = prefix[:i]
 		var resp structs.SearchResponse
-		assert.Nil(msgpackrpc.CallWithCodec(codec, "Search.PrefixSearch", req, &resp))
-		assert.Equal(1, len(resp.Matches[structs.Jobs]))
-		assert.Equal(job.ID, resp.Matches[structs.Jobs][0])
-		assert.EqualValues(jobIndex, resp.Index)
+		require.NoError(t, msgpackrpc.CallWithCodec(codec, "Search.PrefixSearch", req, &resp))
+		require.Equal(t, 1, len(resp.Matches[structs.Jobs]))
+		require.Equal(t, job.ID, resp.Matches[structs.Jobs][0])
+		require.EqualValues(t, jobIndex, resp.Index)
 	}
 }
 
