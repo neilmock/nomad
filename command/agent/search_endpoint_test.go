@@ -227,8 +227,8 @@ func TestHTTP_FuzzySearch_MultipleJobs(t *testing.T) {
 		res := resp.(structs.FuzzySearchResponse)
 		require.Len(t, res.Matches, 1)
 
-		cmds := res.Matches[structs.Commands]
-		require.Len(t, cmds, 3)
+		commands := res.Matches[structs.Commands]
+		require.Len(t, commands, 3)
 
 		exp := []structs.FuzzyMatch{{
 			ID:    "/bin/no",
@@ -240,7 +240,10 @@ func TestHTTP_FuzzySearch_MultipleJobs(t *testing.T) {
 			ID:    "/sbin/ping",
 			Scope: []string{"default", "job4", "web", "web"},
 		}}
-		require.Equal(t, exp, cmds)
+		require.Equal(t, exp, commands)
+
+		require.False(t, res.Truncations[structs.Jobs])
+		require.NotEqual(t, "0", respW.HeaderMap.Get("X-Nomad-Index"))
 	})
 }
 
@@ -271,6 +274,41 @@ func TestHTTP_PrefixSearch_Evaluation(t *testing.T) {
 		require.Len(t, j, 1)
 		require.Contains(t, j, eval1.ID)
 		require.NotContains(t, j, eval2.ID)
+		require.False(t, res.Truncations[structs.Evals])
+		require.Equal(t, "9000", respW.HeaderMap.Get("X-Nomad-Index"))
+	})
+}
+
+func TestHTTP_FuzzySearch_Evaluation(t *testing.T) {
+	t.Parallel()
+
+	httpTest(t, nil, func(s *TestAgent) {
+		state := s.Agent.server.State()
+		eval1 := mock.Eval()
+		eval2 := mock.Eval()
+		err := state.UpsertEvals(structs.MsgTypeTestSetup, 9000, []*structs.Evaluation{eval1, eval2})
+		require.NoError(t, err)
+
+		// fuzzy search does prefix search for evaluations
+		prefix := eval1.ID[:len(eval1.ID)-2]
+		data := structs.FuzzySearchRequest{Text: prefix, Context: structs.Evals}
+		req, err := http.NewRequest("POST", "/v1/search/fuzzy", encodeReq(data))
+		require.NoError(t, err)
+
+		respW := httptest.NewRecorder()
+
+		resp, err := s.Server.FuzzySearchRequest(respW, req)
+		require.NoError(t, err)
+
+		res := resp.(structs.FuzzySearchResponse)
+		require.Len(t, res.Matches, 1)
+
+		matches := res.Matches[structs.Evals]
+		require.Len(t, matches, 1)
+
+		require.Equal(t, structs.FuzzyMatch{
+			ID: eval1.ID,
+		}, matches[0])
 		require.False(t, res.Truncations[structs.Evals])
 		require.Equal(t, "9000", respW.HeaderMap.Get("X-Nomad-Index"))
 	})
