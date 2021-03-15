@@ -440,6 +440,7 @@ func (s *Search) PrefixSearch(args *structs.SearchRequest, reply *structs.Search
 			iters := make(map[structs.Context]memdb.ResultIterator)
 
 			contexts := expandSearchContexts(aclObj, namespace, args.Context)
+			fmt.Println("CONTEXTS:", contexts)
 
 			for _, ctx := range contexts {
 				iter, err := getResourceIter(ctx, aclObj, namespace, roundUUIDDownIfOdd(args.Prefix, args.Context), ws, state)
