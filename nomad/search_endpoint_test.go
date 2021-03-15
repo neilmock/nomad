@@ -17,12 +17,16 @@ import (
 
 const jobIndex = 1000
 
-func registerAndVerifyJob(s *Server, t *testing.T, prefix string, counter int) *structs.Job {
+func registerMockJob(s *Server, t *testing.T, prefix string, counter int) *structs.Job {
 	job := mock.Job()
 	job.ID = prefix + strconv.Itoa(counter)
+	registerJob(s, t, job)
+	return job
+}
+
+func registerJob(s *Server, t *testing.T, job *structs.Job) {
 	fsmState := s.fsm.State()
 	require.NoError(t, fsmState.UpsertJob(structs.MsgTypeTestSetup, jobIndex, job))
-	return job
 }
 
 func TestSearch_PrefixSearch_Job(t *testing.T) {
@@ -37,7 +41,7 @@ func TestSearch_PrefixSearch_Job(t *testing.T) {
 	codec := rpcClient(t, s)
 	testutil.WaitForLeader(t, s.RPC)
 
-	job := registerAndVerifyJob(s, t, prefix, 0)
+	job := registerMockJob(s, t, prefix, 0)
 
 	req := &structs.SearchRequest{
 		Prefix:  prefix,
@@ -71,7 +75,7 @@ func TestSearch_PrefixSearch_ACL(t *testing.T) {
 	testutil.WaitForLeader(t, s.RPC)
 	fsmState := s.fsm.State()
 
-	job := registerAndVerifyJob(s, t, jobID, 0)
+	job := registerMockJob(s, t, jobID, 0)
 	require.NoError(t, fsmState.UpsertNode(structs.MsgTypeTestSetup, 1001, mock.Node()))
 
 	req := &structs.SearchRequest{
@@ -180,7 +184,7 @@ func TestSearch_PrefixSearch_All_JobWithHyphen(t *testing.T) {
 	testutil.WaitForLeader(t, s.RPC)
 
 	// Register a job and an allocation
-	job := registerAndVerifyJob(s, t, prefix, 0)
+	job := registerMockJob(s, t, prefix, 0)
 	alloc := mock.Alloc()
 	alloc.JobID = job.ID
 	alloc.Namespace = job.Namespace
@@ -222,7 +226,7 @@ func TestSearch_PrefixSearch_All_LongJob(t *testing.T) {
 	testutil.WaitForLeader(t, s.RPC)
 
 	// Register a job and an allocation
-	job := registerAndVerifyJob(s, t, prefix, 0)
+	job := registerMockJob(s, t, prefix, 0)
 	alloc := mock.Alloc()
 	alloc.JobID = job.ID
 	summary := mock.JobSummary(alloc.JobID)
@@ -268,7 +272,7 @@ func TestSearch_PrefixSearch_Truncate(t *testing.T) {
 	testutil.WaitForLeader(t, s.RPC)
 
 	for counter := 0; counter < 25; counter++ {
-		registerAndVerifyJob(s, t, prefix, counter)
+		registerMockJob(s, t, prefix, counter)
 	}
 
 	req := &structs.SearchRequest{
@@ -303,7 +307,7 @@ func TestSearch_PrefixSearch_AllWithJob(t *testing.T) {
 	codec := rpcClient(t, s)
 	testutil.WaitForLeader(t, s.RPC)
 
-	job := registerAndVerifyJob(s, t, prefix, 0)
+	job := registerMockJob(s, t, prefix, 0)
 	eval1 := mock.Eval()
 	eval1.ID = job.ID
 	require.NoError(t, s.fsm.State().UpsertEvals(structs.MsgTypeTestSetup, 2000, []*structs.Evaluation{eval1}))
@@ -568,7 +572,7 @@ func TestSearch_PrefixSearch_NoPrefix(t *testing.T) {
 	codec := rpcClient(t, s)
 	testutil.WaitForLeader(t, s.RPC)
 
-	job := registerAndVerifyJob(s, t, prefix, 0)
+	job := registerMockJob(s, t, prefix, 0)
 
 	req := &structs.SearchRequest{
 		Prefix:  "",
@@ -631,8 +635,8 @@ func TestSearch_PrefixSearch_RoundDownToEven(t *testing.T) {
 	codec := rpcClient(t, s)
 	testutil.WaitForLeader(t, s.RPC)
 
-	job := registerAndVerifyJob(s, t, id1, 0)
-	registerAndVerifyJob(s, t, id2, 50)
+	job := registerMockJob(s, t, id1, 0)
+	registerMockJob(s, t, id2, 50)
 
 	req := &structs.SearchRequest{
 		Prefix:  prefix,
@@ -669,7 +673,7 @@ func TestSearch_PrefixSearch_MultiRegion(t *testing.T) {
 	TestJoin(t, s1, s2)
 	testutil.WaitForLeader(t, s1.RPC)
 
-	job := registerAndVerifyJob(s1, t, jobName, 0)
+	job := registerMockJob(s1, t, jobName, 0)
 
 	req := &structs.SearchRequest{
 		Prefix:  "",
@@ -954,4 +958,111 @@ func TestSearch_PrefixSearch_ScalingPolicy(t *testing.T) {
 	require.Len(t, resp.Matches[structs.ScalingPolicies], 1)
 	require.Equal(t, policy.ID, resp.Matches[structs.ScalingPolicies][0])
 	require.Equal(t, uint64(jobIndex), resp.Index)
+}
+
+func TestSearch_FuzzySearch_ACL(t *testing.T) {
+	t.Parallel()
+
+	s, root, cleanupS := TestACLServer(t, func(c *Config) {
+		c.NumSchedulers = 0
+		c.SearchConfig.MinTermLength = 1
+	})
+	defer cleanupS()
+	codec := rpcClient(t, s)
+	testutil.WaitForLeader(t, s.RPC)
+	fsmState := s.fsm.State()
+
+	job := mock.Job()
+	registerJob(s, t, job)
+
+	require.NoError(t, fsmState.UpsertNode(structs.MsgTypeTestSetup, 1001, mock.Node()))
+
+	req := &structs.FuzzySearchRequest{
+		Text:         "set-this-in-test",
+		Context:      structs.Jobs,
+		QueryOptions: structs.QueryOptions{Region: "global", Namespace: job.Namespace},
+	}
+
+	// Try without a token and expect failure
+	{
+		var resp structs.FuzzySearchResponse
+		err := msgpackrpc.CallWithCodec(codec, "Search.FuzzySearch", req, &resp)
+		require.EqualError(t, err, structs.ErrPermissionDenied.Error())
+	}
+
+	// Try with an invalid token and expect failure
+	{
+		invalidToken := mock.CreatePolicyAndToken(t, fsmState, 1003, "test-invalid",
+			mock.NamespacePolicy(structs.DefaultNamespace, "", []string{acl.NamespaceCapabilityListJobs}))
+		req.AuthToken = invalidToken.SecretID
+		var resp structs.FuzzySearchResponse
+		err := msgpackrpc.CallWithCodec(codec, "Search.FuzzySearch", req, &resp)
+		require.EqualError(t, err, structs.ErrPermissionDenied.Error())
+	}
+
+	// Try with a node:read token and expect failure due to Jobs being the context
+	{
+		validToken := mock.CreatePolicyAndToken(t, fsmState, 1005, "test-invalid2", mock.NodePolicy(acl.PolicyRead))
+		req.AuthToken = validToken.SecretID
+		var resp structs.FuzzySearchResponse
+		err := msgpackrpc.CallWithCodec(codec, "Search.FuzzySearch", req, &resp)
+		require.EqualError(t, err, structs.ErrPermissionDenied.Error())
+	}
+
+	// Try with a node:read token and expect success due to All context
+	{
+		validToken := mock.CreatePolicyAndToken(t, fsmState, 1007, "test-valid", mock.NodePolicy(acl.PolicyRead))
+		req.Context = structs.All
+		req.AuthToken = validToken.SecretID
+		req.Text = "oo" // mock node ID is foobar
+		var resp structs.FuzzySearchResponse
+		require.NoError(t, msgpackrpc.CallWithCodec(codec, "Search.FuzzySearch", req, &resp))
+		require.Equal(t, uint64(1001), resp.Index)
+		require.Len(t, resp.Matches[structs.Nodes], 1)
+
+		// Jobs filtered out since token only has access to node:read
+		require.Len(t, resp.Matches[structs.Jobs], 0)
+	}
+
+	// Try with a valid token for namespace:read-job
+	{
+		validToken := mock.CreatePolicyAndToken(t, fsmState, 1009, "test-valid2",
+			mock.NamespacePolicy(structs.DefaultNamespace, "", []string{acl.NamespaceCapabilityReadJob}))
+		req.AuthToken = validToken.SecretID
+		req.Text = "jo" // mock job Name is my-job
+		var resp structs.FuzzySearchResponse
+		require.NoError(t, msgpackrpc.CallWithCodec(codec, "Search.FuzzySearch", req, &resp))
+		require.Len(t, resp.Matches[structs.Jobs], 1)
+		require.Equal(t, structs.FuzzyMatch{
+			ID:    "my-job",
+			Scope: []string{"default"},
+		}, resp.Matches[structs.Jobs][0])
+
+		// Index of job - not node - because node context is filtered out
+		require.Equal(t, uint64(1000), resp.Index)
+
+		// Nodes filtered out since token only has access to namespace:read-job
+		require.Len(t, resp.Matches[structs.Nodes], 0)
+	}
+
+	// Try with a management token
+	{
+		req.AuthToken = root.SecretID
+		var resp structs.FuzzySearchResponse
+		req.Text = "o" // matches Job:my-job and Node:foobar
+		require.NoError(t, msgpackrpc.CallWithCodec(codec, "Search.FuzzySearch", req, &resp))
+		require.Equal(t, uint64(1001), resp.Index)
+		require.Len(t, resp.Matches[structs.Jobs], 1)
+		require.Equal(t, structs.FuzzyMatch{
+			ID: "my-job", Scope: []string{"default"},
+		}, resp.Matches[structs.Jobs][0])
+		require.Len(t, resp.Matches[structs.Nodes], 1)
+		require.Equal(t, structs.FuzzyMatch{
+			ID: "foobar",
+		}, resp.Matches[structs.Nodes][0])
+	}
+}
+
+func TestSearch_FuzzySearch_Job(t *testing.T) {
+	// todo, the big one
 }

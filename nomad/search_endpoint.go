@@ -186,13 +186,17 @@ func (s *Search) fuzzyMatchSingle(raw interface{}, text string) (structs.Context
 		ctx = structs.Plugins
 	}
 
+	fmt.Println("match single, text:", text, "name:", name)
+
 	if idx := strings.Index(name, text); idx >= 0 {
+		fmt.Println(" -> matched")
 		return ctx, &fuzzyMatch{
 			id:    name,
 			score: idx,
 			scope: nil, // currently no non-job sub-types need scoping
 		}
 	}
+	fmt.Println(" -> NO match")
 
 	return "", nil
 }
