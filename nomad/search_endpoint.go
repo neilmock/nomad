@@ -105,12 +105,18 @@ func (s *Search) getFuzzyMatches(iter memdb.ResultIterator, text string) (map[st
 	unsorted := make(map[structs.Context][]fuzzyMatch)
 	truncations := make(map[structs.Context]bool)
 
-	accumulateSet := func(set map[structs.Context][]fuzzyMatch) {
+	accumulateSet := func(limited bool, set map[structs.Context][]fuzzyMatch) {
 		for ctx, matches := range set {
 			for _, match := range matches {
 				if len(unsorted[ctx]) < limitResults {
 					unsorted[ctx] = append(unsorted[ctx], match)
 				} else {
+					// truncated by results limit
+					truncations[ctx] = true
+					return
+				}
+				if limited {
+					// truncated by query limit
 					truncations[ctx] = true
 					return
 				}
@@ -118,15 +124,28 @@ func (s *Search) getFuzzyMatches(iter memdb.ResultIterator, text string) (map[st
 		}
 	}
 
-	accumulateSingle := func(ctx structs.Context, match *fuzzyMatch) {
+	accumulateSingle := func(limited bool, ctx structs.Context, match *fuzzyMatch) {
 		if match != nil {
 			if len(unsorted[ctx]) < limitResults {
 				unsorted[ctx] = append(unsorted[ctx], *match)
 			} else {
+				// truncated by results limit
+				truncations[ctx] = true
+				return
+			}
+			if limited {
+				// truncated by query limit
 				truncations[ctx] = true
 				return
 			}
 		}
+	}
+
+	limited := func(i int, iter memdb.ResultIterator) bool {
+		if i == limitQuery-1 {
+			return iter.Next() != nil
+		}
+		return false
 	}
 
 	for i := 0; i < limitQuery; i++ {
@@ -137,9 +156,11 @@ func (s *Search) getFuzzyMatches(iter memdb.ResultIterator, text string) (map[st
 
 		switch t := raw.(type) {
 		case *structs.Job:
-			accumulateSet(s.fuzzyMatchesJob(t, text))
+			set := s.fuzzyMatchesJob(t, text)
+			accumulateSet(limited(i, iter), set)
 		default:
-			accumulateSingle(s.fuzzyMatchSingle(raw, text))
+			ctx, match := s.fuzzyMatchSingle(raw, text)
+			accumulateSingle(limited(i, iter), ctx, match)
 		}
 	}
 
@@ -186,17 +207,13 @@ func (s *Search) fuzzyMatchSingle(raw interface{}, text string) (structs.Context
 		ctx = structs.Plugins
 	}
 
-	fmt.Println("match single, text:", text, "name:", name)
-
 	if idx := strings.Index(name, text); idx >= 0 {
-		fmt.Println(" -> matched")
 		return ctx, &fuzzyMatch{
 			id:    name,
 			score: idx,
 			scope: nil, // currently no non-job sub-types need scoping
 		}
 	}
-	fmt.Println(" -> NO match")
 
 	return "", nil
 }

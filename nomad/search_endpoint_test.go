@@ -1,6 +1,7 @@
 package nomad
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -232,12 +233,8 @@ func TestSearch_PrefixSearch_All_LongJob(t *testing.T) {
 	summary := mock.JobSummary(alloc.JobID)
 	fsmState := s.fsm.State()
 
-	if err := fsmState.UpsertJobSummary(999, summary); err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if err := fsmState.UpsertAllocs(structs.MsgTypeTestSetup, 1000, []*structs.Allocation{alloc}); err != nil {
-		t.Fatalf("err: %v", err)
-	}
+	require.NoError(t, fsmState.UpsertJobSummary(999, summary))
+	require.NoError(t, fsmState.UpsertAllocs(structs.MsgTypeTestSetup, 1000, []*structs.Allocation{alloc}))
 
 	req := &structs.SearchRequest{
 		Prefix:  prefix,
@@ -249,9 +246,7 @@ func TestSearch_PrefixSearch_All_LongJob(t *testing.T) {
 	}
 
 	var resp structs.SearchResponse
-	if err := msgpackrpc.CallWithCodec(codec, "Search.PrefixSearch", req, &resp); err != nil {
-		t.Fatalf("err: %v", err)
-	}
+	require.NoError(t, msgpackrpc.CallWithCodec(codec, "Search.PrefixSearch", req, &resp))
 
 	require.Len(t, resp.Matches[structs.Jobs], 1)
 	require.Equal(t, job.ID, resp.Matches[structs.Jobs][0])
@@ -285,9 +280,7 @@ func TestSearch_PrefixSearch_Truncate(t *testing.T) {
 	}
 
 	var resp structs.SearchResponse
-	if err := msgpackrpc.CallWithCodec(codec, "Search.PrefixSearch", req, &resp); err != nil {
-		t.Fatalf("err: %v", err)
-	}
+	require.NoError(t, msgpackrpc.CallWithCodec(codec, "Search.PrefixSearch", req, &resp))
 
 	require.Len(t, resp.Matches[structs.Jobs], 20)
 	require.True(t, resp.Truncations[structs.Jobs])
@@ -1061,6 +1054,67 @@ func TestSearch_FuzzySearch_ACL(t *testing.T) {
 			ID: "foobar",
 		}, resp.Matches[structs.Nodes][0])
 	}
+}
+
+func TestSearch_FuzzySearch_ShortText(t *testing.T) {
+	t.Parallel()
+
+	s, cleanupS := TestServer(t, func(c *Config) {
+		c.NumSchedulers = 0
+		c.SearchConfig.MinTermLength = 5
+	})
+	defer cleanupS()
+	codec := rpcClient(t, s)
+	testutil.WaitForLeader(t, s.RPC)
+	fsmState := s.fsm.State()
+
+	job := mock.Job()
+	registerJob(s, t, job)
+
+	require.NoError(t, fsmState.UpsertNode(structs.MsgTypeTestSetup, 1001, mock.Node()))
+
+	req := &structs.FuzzySearchRequest{
+		Text:         "foo", // min set to 5
+		Context:      structs.Jobs,
+		QueryOptions: structs.QueryOptions{Region: "global", Namespace: job.Namespace},
+	}
+
+	var resp structs.FuzzySearchResponse
+	require.EqualError(t, msgpackrpc.CallWithCodec(codec, "Search.FuzzySearch", req, &resp),
+		"fuzzy search query must be at least 5 characters, got 3")
+}
+
+func TestSearch_FuzzySearch_Truncate(t *testing.T) {
+	t.Parallel()
+
+	s, cleanupS := TestServer(t, func(c *Config) {
+		c.NumSchedulers = 0
+	})
+	defer cleanupS()
+	codec := rpcClient(t, s)
+	testutil.WaitForLeader(t, s.RPC)
+	fsmState := s.fsm.State()
+
+	require.NoError(t, fsmState.UpsertNode(structs.MsgTypeTestSetup, 1001, mock.Node()))
+
+	req := &structs.FuzzySearchRequest{
+		Text:         "job",
+		Context:      structs.Jobs,
+		QueryOptions: structs.QueryOptions{Region: "global", Namespace: "default"},
+	}
+
+	for i := 0; i < 25; i++ {
+		job := mock.Job()
+		job.Name = fmt.Sprintf("my-job-%d", i)
+		registerJob(s, t, job)
+	}
+
+	var resp structs.FuzzySearchResponse
+	require.NoError(t, msgpackrpc.CallWithCodec(codec, "Search.FuzzySearch", req, &resp))
+
+	require.Len(t, resp.Matches[structs.Jobs], 20)
+	require.True(t, resp.Truncations[structs.Jobs])
+	require.Equal(t, uint64(jobIndex), resp.Index)
 }
 
 func TestSearch_FuzzySearch_Job(t *testing.T) {
