@@ -401,11 +401,11 @@ func (*Search) silenceError(err error) bool {
 	case strings.Contains(e, "must be even length"):
 	case strings.Contains(e, "UUID should have maximum of 4"):
 	default:
-		return true
+		// err was not nil and not about UUID prefix, something bad happened
+		return false
 	}
 
-	// err was not nil and not about UUID prefix, something bad happened
-	return false
+	return true
 }
 
 // PrefixSearch is used to list matches for a given prefix, and returns
@@ -445,8 +445,10 @@ func (s *Search) PrefixSearch(args *structs.SearchRequest, reply *structs.Search
 			for _, ctx := range contexts {
 				iter, err := getResourceIter(ctx, aclObj, namespace, roundUUIDDownIfOdd(args.Prefix, args.Context), ws, state)
 				fmt.Println("getRI ctx:", ctx, "prefix:", args.Prefix, "aCtx:", args.Context, "iter:", iter, "err:", err)
-				if err != nil && !s.silenceError(err) {
-					return err
+				if err != nil {
+					if !s.silenceError(err) {
+						return err
+					}
 				} else {
 					fmt.Println("set context:", ctx, "iter:", iter)
 					iters[ctx] = iter
@@ -540,10 +542,13 @@ func (s *Search) FuzzySearch(args *structs.FuzzySearchRequest, reply *structs.Fu
 				// types that use UUID prefix searching
 				case structs.Evals, structs.Deployments, structs.ScalingPolicies, structs.Volumes:
 					iter, err := getResourceIter(ctx, aclObj, namespace, roundUUIDDownIfOdd(args.Prefix, args.Context), ws, state)
-					if err != nil && !s.silenceError(err) {
-						return err
+					if err != nil {
+						if !s.silenceError(err) {
+							return err
+						}
+					} else {
+						prefixIters[ctx] = iter
 					}
-					prefixIters[ctx] = iter
 
 				// types that use fuzzy searching
 				default:
