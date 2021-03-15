@@ -75,6 +75,33 @@ func TestHTTP_PrefixSearch_POST(t *testing.T) {
 	})
 }
 
+func TestHTTP_FuzzySearch_POST(t *testing.T) {
+	t.Parallel()
+
+	testJobID := "5b22ef21-1c21-e2f0-9d49-e7118f084a64"
+
+	httpTest(t, nil, func(s *TestAgent) {
+		createJobForTest(testJobID, s, t)
+		data := structs.FuzzySearchRequest{Text: "fau", Context: structs.Namespaces}
+		req, err := http.NewRequest("POST", "/v1/search/fuzzy", encodeReq(data))
+		require.NoError(t, err)
+
+		respW := httptest.NewRecorder()
+
+		resp, err := s.Server.FuzzySearchRequest(respW, req)
+		require.NoError(t, err)
+
+		res := resp.(structs.FuzzySearchResponse)
+		require.Len(t, res.Matches, 1) // searched one context: namespaces
+
+		ns := res.Matches[structs.Namespaces]
+		require.Len(t, ns, 1)
+
+		require.Equal(t, "default", ns[0].ID)
+		require.Nil(t, ns[0].Scope) // only job types have scope
+	})
+}
+
 func TestHTTP_PrefixSearch_PUT(t *testing.T) {
 	t.Parallel()
 
