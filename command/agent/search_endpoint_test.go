@@ -345,6 +345,36 @@ func TestHTTP_PrefixSearch_Allocations(t *testing.T) {
 	})
 }
 
+func TestHTTP_FuzzySearch_Allocations(t *testing.T) {
+	t.Parallel()
+
+	httpTest(t, nil, func(s *TestAgent) {
+		state := s.Agent.server.State()
+		alloc := mock.Alloc()
+		err := state.UpsertAllocs(structs.MsgTypeTestSetup, 7000, []*structs.Allocation{alloc})
+		require.NoError(t, err)
+
+		data := structs.FuzzySearchRequest{Text: "-job", Context: structs.Allocs}
+		req, err := http.NewRequest("POST", "/v1/search/fuzzy", encodeReq(data))
+		require.NoError(t, err)
+
+		respW := httptest.NewRecorder()
+
+		resp, err := s.Server.FuzzySearchRequest(respW, req)
+		require.NoError(t, err)
+
+		res := resp.(structs.FuzzySearchResponse)
+		require.Len(t, res.Matches, 1)
+
+		a := res.Matches[structs.Allocs]
+		require.Len(t, a, 1)
+		require.Equal(t, "my-job.web[0]", a[0].ID)
+
+		require.False(t, res.Truncations[structs.Allocs])
+		require.Equal(t, "7000", respW.HeaderMap.Get("X-Nomad-Index"))
+	})
+}
+
 func TestHTTP_PrefixSearch_Nodes(t *testing.T) {
 	t.Parallel()
 
@@ -370,6 +400,36 @@ func TestHTTP_PrefixSearch_Nodes(t *testing.T) {
 		n := res.Matches[structs.Nodes]
 		require.Len(t, n, 1)
 		require.Contains(t, n, node.ID)
+
+		require.False(t, res.Truncations[structs.Nodes])
+		require.Equal(t, "6000", respW.HeaderMap.Get("X-Nomad-Index"))
+	})
+}
+
+func TestHTTP_FuzzySearch_Nodes(t *testing.T) {
+	t.Parallel()
+
+	httpTest(t, nil, func(s *TestAgent) {
+		state := s.Agent.server.State()
+		node := mock.Node() // foobar
+		err := state.UpsertNode(structs.MsgTypeTestSetup, 6000, node)
+		require.NoError(t, err)
+
+		data := structs.FuzzySearchRequest{Text: "oo", Context: structs.Nodes}
+		req, err := http.NewRequest("POST", "/v1/search/fuzzy", encodeReq(data))
+		require.NoError(t, err)
+
+		respW := httptest.NewRecorder()
+
+		resp, err := s.Server.FuzzySearchRequest(respW, req)
+		require.NoError(t, err)
+
+		res := resp.(structs.FuzzySearchResponse)
+		require.Len(t, res.Matches, 1)
+
+		n := res.Matches[structs.Nodes]
+		require.Len(t, n, 1)
+		require.Equal(t, "foobar", n[0].ID)
 
 		require.False(t, res.Truncations[structs.Nodes])
 		require.Equal(t, "6000", respW.HeaderMap.Get("X-Nomad-Index"))
@@ -404,6 +464,36 @@ func TestHTTP_PrefixSearch_Deployments(t *testing.T) {
 	})
 }
 
+func TestHTTP_FuzzySearch_Deployments(t *testing.T) {
+	t.Parallel()
+
+	httpTest(t, nil, func(s *TestAgent) {
+		state := s.Agent.server.State()
+		deployment := mock.Deployment()
+		require.NoError(t, state.UpsertDeployment(999, deployment), "UpsertDeployment")
+
+		// fuzzy search of deployments are prefix searches
+		prefix := deployment.ID[:len(deployment.ID)-2]
+		data := structs.FuzzySearchRequest{Text: prefix, Context: structs.Deployments}
+		req, err := http.NewRequest("POST", "/v1/search/fuzzy", encodeReq(data))
+		require.NoError(t, err)
+
+		respW := httptest.NewRecorder()
+
+		resp, err := s.Server.FuzzySearchRequest(respW, req)
+		require.NoError(t, err)
+
+		res := resp.(structs.FuzzySearchResponse)
+		require.Len(t, res.Matches, 1)
+
+		n := res.Matches[structs.Deployments]
+		require.Len(t, n, 1)
+		require.Equal(t, deployment.ID, n[0].ID)
+
+		require.Equal(t, "999", respW.HeaderMap.Get("X-Nomad-Index"))
+	})
+}
+
 func TestHTTP_PrefixSearch_NoJob(t *testing.T) {
 	t.Parallel()
 
@@ -420,6 +510,25 @@ func TestHTTP_PrefixSearch_NoJob(t *testing.T) {
 		res := resp.(structs.SearchResponse)
 		require.Len(t, res.Matches, 1)
 		require.Len(t, res.Matches[structs.Jobs], 0)
+		require.Equal(t, "0", respW.HeaderMap.Get("X-Nomad-Index"))
+	})
+}
+
+func TestHTTP_FuzzySearch_NoJob(t *testing.T) {
+	t.Parallel()
+
+	httpTest(t, nil, func(s *TestAgent) {
+		data := structs.FuzzySearchRequest{Text: "12345", Context: structs.Jobs}
+		req, err := http.NewRequest("POST", "/v1/search/fuzzy", encodeReq(data))
+		require.NoError(t, err)
+
+		respW := httptest.NewRecorder()
+
+		resp, err := s.Server.FuzzySearchRequest(respW, req)
+		require.NoError(t, err)
+
+		res := resp.(structs.FuzzySearchResponse)
+		require.Len(t, res.Matches, 0)
 		require.Equal(t, "0", respW.HeaderMap.Get("X-Nomad-Index"))
 	})
 }
@@ -455,6 +564,41 @@ func TestHTTP_PrefixSearch_AllContext(t *testing.T) {
 		require.Len(t, matchedEvals, 1)
 		require.Equal(t, testJobID, matchedJobs[0])
 		require.Equal(t, eval1.ID, matchedEvals[0])
+		require.Equal(t, "8000", respW.HeaderMap.Get("X-Nomad-Index"))
+	})
+}
+
+func TestHTTP_FuzzySearch_AllContext(t *testing.T) {
+	t.Parallel()
+
+	httpTest(t, nil, func(s *TestAgent) {
+		createCmdJobForTest("job1", "/bin/aardvark", s, t)
+
+		state := s.Agent.server.State()
+		eval1 := mock.Eval()
+		eval1.ID = "aaaa6573-04cb-61b4-04cb-865aaaf5d400"
+		err := state.UpsertEvals(structs.MsgTypeTestSetup, 8000, []*structs.Evaluation{eval1})
+		require.NoError(t, err)
+
+		data := structs.FuzzySearchRequest{Text: "aa", Context: structs.All}
+		req, err := http.NewRequest("POST", "/v1/search/fuzzy", encodeReq(data))
+		require.NoError(t, err)
+
+		respW := httptest.NewRecorder()
+
+		resp, err := s.Server.FuzzySearchRequest(respW, req)
+		require.NoError(t, err)
+
+		res := resp.(structs.FuzzySearchResponse)
+		matchedCommands := res.Matches[structs.Commands]
+		matchedEvals := res.Matches[structs.Evals]
+		require.Len(t, matchedCommands, 1)
+		require.Len(t, matchedEvals, 1)
+		require.Equal(t, eval1.ID, matchedEvals[0].ID)
+		require.Equal(t, "/bin/aardvark", matchedCommands[0].ID)
+		require.Equal(t, []string{
+			"default", "job1", "web", "web",
+		}, matchedCommands[0].Scope)
 		require.Equal(t, "8000", respW.HeaderMap.Get("X-Nomad-Index"))
 	})
 }

@@ -382,6 +382,23 @@ func roundUUIDDownIfOdd(prefix string, context structs.Context) string {
 	return prefix[:len(prefix)-1]
 }
 
+func (*Search) filterError(err error) error {
+	if err != nil {
+		e := err.Error()
+		switch {
+		// Searching other contexts with job names raises an error, which in
+		// this case we want to ignore.
+		case strings.Contains(e, "Invalid UUID: encoding/hex"):
+		case strings.Contains(e, "UUID have 36 characters"):
+		case strings.Contains(e, "must be even length"):
+		case strings.Contains(e, "UUID should have maximum of 4"):
+		default:
+			return err
+		}
+	}
+	return nil
+}
+
 // PrefixSearch is used to list matches for a given prefix, and returns
 // matching jobs, evaluations, allocations, and/or nodes.
 func (s *Search) PrefixSearch(args *structs.SearchRequest, reply *structs.SearchResponse) error {
@@ -417,18 +434,8 @@ func (s *Search) PrefixSearch(args *structs.SearchRequest, reply *structs.Search
 
 			for _, ctx := range contexts {
 				iter, err := getResourceIter(ctx, aclObj, namespace, roundUUIDDownIfOdd(args.Prefix, args.Context), ws, state)
-				if err != nil {
-					e := err.Error()
-					switch {
-					// Searching other contexts with job names raises an error, which in
-					// this case we want to ignore.
-					case strings.Contains(e, "Invalid UUID: encoding/hex"):
-					case strings.Contains(e, "UUID have 36 characters"):
-					case strings.Contains(e, "must be even length"):
-					case strings.Contains(e, "UUID should have maximum of 4"):
-					default:
-						return err
-					}
+				if s.filterError(err) != nil {
+					return err
 				} else {
 					iters[ctx] = iter
 				}
@@ -521,7 +528,7 @@ func (s *Search) FuzzySearch(args *structs.FuzzySearchRequest, reply *structs.Fu
 				// types that use UUID prefix searching
 				case structs.Evals, structs.Deployments, structs.ScalingPolicies, structs.Volumes:
 					iter, err := getResourceIter(ctx, aclObj, namespace, roundUUIDDownIfOdd(args.Prefix, args.Context), ws, state)
-					if err != nil {
+					if s.filterError(err) != nil {
 						return err
 					}
 					prefixIters[ctx] = iter

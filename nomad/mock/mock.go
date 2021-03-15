@@ -1098,8 +1098,10 @@ func JobSummary(jobID string) *structs.JobSummary {
 }
 
 func Alloc() *structs.Allocation {
+	job := Job()
 	alloc := &structs.Allocation{
 		ID:        uuid.Generate(),
+		Name:      fmt.Sprintf("%s.%s[%d]", job.Name, "web", 0),
 		EvalID:    uuid.Generate(),
 		NodeID:    "12345678-abcd-efab-cdef-123456789abc",
 		Namespace: structs.DefaultNamespace,
@@ -1163,7 +1165,7 @@ func Alloc() *structs.Allocation {
 				DiskMB: 150,
 			},
 		},
-		Job:           Job(),
+		Job:           job,
 		DesiredStatus: structs.AllocDesiredStatusRun,
 		ClientStatus:  structs.AllocClientStatusPending,
 	}
